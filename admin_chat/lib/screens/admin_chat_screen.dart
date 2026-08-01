@@ -62,36 +62,59 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     _socket.on('receive_message', (data) {
-      final incomingMessage = Map<String, dynamic>.from(data);
-      setState(() {
-        bool exists = _messages.any(
-          (m) =>
-              m['timestamp'] == incomingMessage['timestamp'] &&
-              m['text'] == incomingMessage['text'] &&
-              m['sender'] == incomingMessage['sender'],
-        );
-
-        if (!exists) {
-          _messages.insert(0, incomingMessage);
-          _saveMessages();
+      try {
+        final Map<String, dynamic> incomingMessage;
+        if (data is List && data.isNotEmpty) {
+          incomingMessage = Map<String, dynamic>.from(data[0]);
+        } else {
+          incomingMessage = Map<String, dynamic>.from(data);
         }
-      });
+
+        setState(() {
+          bool exists = _messages.any(
+            (m) =>
+                m['timestamp'] == incomingMessage['timestamp'] &&
+                m['text'] == incomingMessage['text'] &&
+                m['sender'] == incomingMessage['sender'],
+          );
+
+          if (!exists) {
+            _messages.insert(0, incomingMessage);
+            _saveMessages();
+          }
+        });
+      } catch (e) {
+        print('Message parsing error: $e');
+      }
     });
 
     // ---------------------------------------------------------
-    // NEW: Listen for Incoming Call Invitations
+    // BULLETPROOF INCOMING CALL LISTENER
     // ---------------------------------------------------------
     _socket.on('incoming_call', (data) {
+      print('🔔 Raw incoming call data: $data');
       if (!mounted) return;
-      _showIncomingCallDialog(Map<String, dynamic>.from(data));
+
+      try {
+        final Map<String, dynamic> callData;
+        if (data is List && data.isNotEmpty) {
+          callData = Map<String, dynamic>.from(data[0]);
+        } else {
+          callData = Map<String, dynamic>.from(data);
+        }
+
+        // Trigger the dialog cleanly in the next frame
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _showIncomingCallDialog(callData);
+        });
+      } catch (e) {
+        print('❌ Error parsing incoming call payload: $e');
+      }
     });
 
     _socket.onDisconnect((_) => print('🔴 Disconnected'));
   }
 
-  // ---------------------------------------------------------
-  // NEW: Beautiful Incoming Call Dialog
-  // ---------------------------------------------------------
   void _showIncomingCallDialog(Map<String, dynamic> data) {
     final String caller = data['callerName'] ?? 'Unknown';
     final bool isVideo = data['isVideoCall'] ?? false;
@@ -179,7 +202,6 @@ class _ChatScreenState extends State<ChatScreen> {
                         _socket.emit('call_accepted');
                         Navigator.pop(context);
 
-                        // Push to CallScreen as the RECEIVER (isCaller: false)
                         Navigator.push(
                           context,
                           MaterialPageRoute(
@@ -187,7 +209,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               callerName: caller,
                               isVideoCall: isVideo,
                               isCaller: false,
-                              socket: _socket, // <-- Pass the shared socket
+                              socket: _socket,
                             ),
                           ),
                         );
@@ -228,7 +250,7 @@ class _ChatScreenState extends State<ChatScreen> {
           callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
           isVideoCall: false,
           isCaller: true,
-          socket: _socket, // <-- Pass the shared socket
+          socket: _socket,
         ),
       ),
     );
@@ -242,7 +264,7 @@ class _ChatScreenState extends State<ChatScreen> {
           callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
           isVideoCall: true,
           isCaller: true,
-          socket: _socket, // <-- Pass the shared socket
+          socket: _socket,
         ),
       ),
     );

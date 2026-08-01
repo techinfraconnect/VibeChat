@@ -19,12 +19,12 @@ io.on('connection', (socket) => {
   });
 
   // ---------------------------------------------------------
-  // NEW: PRO CALL HANDSHAKE (Ringing & Accepting)
+  // PRO CALL HANDSHAKE (Ringing & Accepting)
   // ---------------------------------------------------------
   
   // 1. Caller starts ringing the receiver
   socket.on('call_invite', (data) => {
-    console.log(`🔔 Incoming call invite from: ${data.callerName}`);
+    console.log(`🔔 Incoming call invite from: ${data.callerName}. Routing to receiver...`);
     socket.broadcast.emit('incoming_call', data);
   });
 
@@ -42,7 +42,7 @@ io.on('connection', (socket) => {
 
 
   // ---------------------------------------------------------
-  // STANDARD WEBRTC SIGNALING (Executes only after Accept)
+  // STANDARD WEBRTC SIGNALING
   // ---------------------------------------------------------
   socket.on('offer', (data) => {
     console.log('📞 Offer received, routing to peer...');
