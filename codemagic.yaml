@@ -12,7 +12,6 @@ workflows:
           flutter create . --platforms=ios
           flutter clean
           flutter pub get
-          # Build for simulator/generic device architecture without archive signing checks
-          flutter build ios --simulator --release
+          flutter build ios --simulator --debug
     artifacts:
       - build/ios/iphonesimulator/*.app
