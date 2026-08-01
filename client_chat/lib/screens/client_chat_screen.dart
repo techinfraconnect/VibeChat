@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class ChatScreen extends StatefulWidget {
@@ -14,12 +16,33 @@ class _ChatScreenState extends State<ChatScreen> {
 
   late IO.Socket _socket;
   final TextEditingController _controller = TextEditingController();
-  final List<Map<String, dynamic>> _messages = [];
+  List<Map<String, dynamic>> _messages = [];
 
   @override
   void initState() {
     super.initState();
+    _loadStoredMessages();
     _connectSocket();
+  }
+
+  // Load saved messages from local storage when app opens
+  Future<void> _loadStoredMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? storedData = prefs.getString('client_chat_messages');
+    if (storedData != null) {
+      final List decodedList = jsonDecode(storedData);
+      setState(() {
+        _messages = decodedList
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      });
+    }
+  }
+
+  // Save messages to local storage
+  Future<void> _saveMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('client_chat_messages', jsonEncode(_messages));
   }
 
   void _connectSocket() {
@@ -40,10 +63,19 @@ class _ChatScreenState extends State<ChatScreen> {
     // Listen for incoming messages broadcasted from the server
     _socket.on('receive_message', (data) {
       final incomingMessage = Map<String, dynamic>.from(data);
-      // Avoid duplicate local display if we already added our own message instantly
       setState(() {
-        // Check if message already exists to prevent duplicate entries
-        _messages.insert(0, incomingMessage);
+        // Prevent duplicate entries if already present based on timestamp & text
+        bool exists = _messages.any(
+          (m) =>
+              m['timestamp'] == incomingMessage['timestamp'] &&
+              m['text'] == incomingMessage['text'] &&
+              m['sender'] == incomingMessage['sender'],
+        );
+
+        if (!exists) {
+          _messages.insert(0, incomingMessage);
+          _saveMessages();
+        }
       });
     });
 
@@ -59,12 +91,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'timestamp': DateTime.now().toIso8601String(),
     };
 
-    // Instant local UI feedback so the message pops up immediately
-    setState(() {
-      _messages.insert(0, messageData);
-    });
-
-    // Send message to the Node.js backend
+    // Send message to the Node.js backend (Server will broadcast back, avoiding double entry)
     _socket.emit('send_message', messageData);
 
     _controller.clear();

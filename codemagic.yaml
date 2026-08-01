@@ -7,11 +7,11 @@ workflows:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Build Unsigned iOS App
+      - name: Build Unsigned IPA for Sideloadly
         script: |
           flutter create . --platforms=ios
           flutter clean
           flutter pub get
-          flutter build ios --simulator --debug
+          flutter build ipa --release --no-codesign
     artifacts:
-      - build/ios/iphonesimulator/*.app
+      - build/ios/ipa/*.ipa
