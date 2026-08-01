@@ -26,6 +26,9 @@ class _CallScreenState extends State<CallScreen> {
   bool _isFrontCamera = true;
   bool _isRemoteConnected = false;
 
+  // Dynamic status to show the user exactly what is happening
+  String _callStatus = "Connecting...";
+
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
 
@@ -69,16 +72,42 @@ class _CallScreenState extends State<CallScreen> {
       );
       await _createPeerConnection();
 
-      // ONLY the device that initiated the call creates and sends the offer
       if (widget.isCaller) {
-        RTCSessionDescription offer = await _peerConnection!.createOffer();
-        await _peerConnection!.setLocalDescription(offer);
-        _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
+        setState(() => _callStatus = "Ringing...");
+
+        // Determine my own name based on the target callerName
+        String myName = widget.callerName == 'Admin' ? 'Client' : 'Admin';
+
+        // 1. Send the ring invite to the other device
+        _socket.emit('call_invite', {
+          'callerName': myName,
+          'isVideoCall': widget.isVideoCall,
+        });
+      } else {
+        setState(() => _callStatus = "Connecting secure line...");
+      }
+    });
+
+    // 2. The receiver accepted! NOW we generate and send the WebRTC offer.
+    _socket.on('call_ready_for_offer', (_) async {
+      if (mounted) setState(() => _callStatus = "Establishing Secure Call...");
+
+      RTCSessionDescription offer = await _peerConnection!.createOffer();
+      await _peerConnection!.setLocalDescription(offer);
+      _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
+    });
+
+    // 3. The receiver declined the call.
+    _socket.on('call_rejected', (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Call was declined')));
+        Navigator.pop(context);
       }
     });
 
     _socket.on('offer', (data) async {
-      // If this device is the receiver, handle the incoming offer
       if (_peerConnection == null) await _createPeerConnection();
       await _peerConnection!.setRemoteDescription(
         RTCSessionDescription(data['sdp'], data['type']),
@@ -143,6 +172,7 @@ class _CallScreenState extends State<CallScreen> {
         setState(() {
           _remoteRenderer.srcObject = event.streams[0];
           _isRemoteConnected = true;
+          _callStatus = "Connected Live";
         });
       }
     };
@@ -287,9 +317,7 @@ class _CallScreenState extends State<CallScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          _isRemoteConnected
-                              ? "Connected Live"
-                              : "Establishing Secure Call...",
+                          _callStatus,
                           style: TextStyle(
                             fontSize: 14,
                             color: _isRemoteConnected

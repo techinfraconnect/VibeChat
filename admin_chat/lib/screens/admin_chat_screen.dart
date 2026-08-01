@@ -78,7 +78,132 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     });
 
+    // ---------------------------------------------------------
+    // NEW: Listen for Incoming Call Invitations
+    // ---------------------------------------------------------
+    _socket.on('incoming_call', (data) {
+      if (!mounted) return;
+      _showIncomingCallDialog(Map<String, dynamic>.from(data));
+    });
+
     _socket.onDisconnect((_) => print('🔴 Disconnected'));
+  }
+
+  // ---------------------------------------------------------
+  // NEW: Beautiful Incoming Call Dialog
+  // ---------------------------------------------------------
+  void _showIncomingCallDialog(Map<String, dynamic> data) {
+    final String caller = data['callerName'] ?? 'Unknown';
+    final bool isVideo = data['isVideoCall'] ?? false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          elevation: 20,
+          backgroundColor: const Color(0xFF1F1F1F),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: widget.senderName == 'Admin'
+                          ? [const Color(0xFF11998e), const Color(0xFF38ef7d)]
+                          : [const Color(0xFF4A00E0), const Color(0xFF8E2DE2)],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            (widget.senderName == 'Admin'
+                                    ? const Color(0xFF11998e)
+                                    : const Color(0xFF8E2DE2))
+                                .withOpacity(0.5),
+                        blurRadius: 15,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+                    color: Colors.white,
+                    size: 40,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Incoming Call',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  caller,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 30),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    FloatingActionButton(
+                      heroTag: 'decline_btn_admin',
+                      backgroundColor: const Color(0xFFD32F2F),
+                      onPressed: () {
+                        _socket.emit('call_rejected');
+                        Navigator.pop(context);
+                      },
+                      child: const Icon(
+                        Icons.call_end_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                    FloatingActionButton(
+                      heroTag: 'accept_btn_admin',
+                      backgroundColor: const Color(0xFF38ef7d),
+                      onPressed: () {
+                        _socket.emit('call_accepted');
+                        Navigator.pop(context);
+
+                        // Push to CallScreen as the RECEIVER (isCaller: false)
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => CallScreen(
+                              callerName: caller,
+                              isVideoCall: isVideo,
+                              isCaller: false,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Icon(
+                        Icons.call_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _sendMessage() {
@@ -94,7 +219,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller.clear();
   }
 
-  // Updated with isCaller: true
   void _startAudioCall() {
     Navigator.push(
       context,
