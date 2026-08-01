@@ -6,26 +6,21 @@ workflows:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Get Flutter Dependencies
-        script: |
-          cd admin_chat
-          flutter pub get
       - name: Build Unsigned iOS App & Package IPA
         script: |
           cd admin_chat
           
-          # 1. FORCE Xcode to completely ignore code signing by injecting overrides directly
+          # Force Xcode to skip code signing
           echo "CODE_SIGNING_ALLOWED = NO" >> ios/Flutter/Generated.xcconfig
           echo "CODE_SIGNING_REQUIRED = NO" >> ios/Flutter/Generated.xcconfig
           echo "CODE_SIGN_IDENTITY = " >> ios/Flutter/Generated.xcconfig
-          echo "CODE_SIGN_ENTITLEMENTS = " >> ios/Flutter/Generated.xcconfig
           
-          # 2. Build the release app for devices (iphoneos)
+          # Build the app without codesign
           flutter build ios --release --no-codesign
           
-          # 3. Package the IPA
-          mkdir -p Payload
+          # Check if the build succeeded and package it
           if [ -d "build/ios/iphoneos/Runner.app" ]; then
+            mkdir -p Payload
             cp -r build/ios/iphoneos/Runner.app Payload/
             zip -r AdminChat.ipa Payload
             cp AdminChat.ipa ../
@@ -35,4 +30,3 @@ workflows:
           fi
     artifacts:
       - AdminChat.ipa
-      - admin_chat/*.ipa
