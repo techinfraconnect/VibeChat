@@ -13,18 +13,44 @@ const io = new Server(server, {
 io.on('connection', (socket) => {
   console.log(`🟢 User connected: ${socket.id}`);
 
+  // Chat Messages
   socket.on('send_message', (data) => {
     io.emit('receive_message', data);
   });
 
-  // WebRTC Signaling Events
+  // ---------------------------------------------------------
+  // NEW: PRO CALL HANDSHAKE (Ringing & Accepting)
+  // ---------------------------------------------------------
+  
+  // 1. Caller starts ringing the receiver
+  socket.on('call_invite', (data) => {
+    console.log(`🔔 Incoming call invite from: ${data.callerName}`);
+    socket.broadcast.emit('incoming_call', data);
+  });
+
+  // 2. Receiver accepts the call (Signals the Caller to finally send the WebRTC Offer)
+  socket.on('call_accepted', () => {
+    console.log('✅ Call accepted by receiver. Triggering offer generation...');
+    socket.broadcast.emit('call_ready_for_offer');
+  });
+
+  // 3. Receiver rejects the call
+  socket.on('call_rejected', () => {
+    console.log('❌ Call rejected by receiver.');
+    socket.broadcast.emit('call_rejected');
+  });
+
+
+  // ---------------------------------------------------------
+  // STANDARD WEBRTC SIGNALING (Executes only after Accept)
+  // ---------------------------------------------------------
   socket.on('offer', (data) => {
-    console.log('📞 Offer received, broadcasting to peer...');
+    console.log('📞 Offer received, routing to peer...');
     socket.broadcast.emit('offer', data);
   });
 
   socket.on('answer', (data) => {
-    console.log('📞 Answer received, broadcasting to peer...');
+    console.log('📞 Answer received, routing back to caller...');
     socket.broadcast.emit('answer', data);
   });
 
