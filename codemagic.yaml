@@ -14,8 +14,23 @@ workflows:
         script: |
           cd admin_chat
           flutter build ios --no-codesign --release
+          
+          # Create Payload directory
           mkdir -p Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
+          
+          # Copy the built app bundle into Payload (checking device vs simulator paths)
+          if [ -d "build/ios/iphoneos/Runner.app" ]; then
+            cp -r build/ios/iphoneos/Runner.app Payload/
+          elif [ -d "build/ios/simulator/Runner.app" ]; then
+            cp -r build/ios/simulator/Runner.app Payload/
+          else
+            echo "Error: Runner.app not found!"
+            exit 1
+          fi
+          
+          # Zip it into a valid IPA file
           zip -r AdminChat.ipa Payload
+          cp AdminChat.ipa ../
     artifacts:
+      - AdminChat.ipa
       - admin_chat/*.ipa
