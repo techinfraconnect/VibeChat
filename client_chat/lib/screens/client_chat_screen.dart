@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'call_screen.dart'; // 1. Added import for the Phase 2 Call Screen
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -97,6 +98,27 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller.clear();
   }
 
+  // 2. Added Phase 2 Call triggers
+  void _startAudioCall() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            const CallScreen(callerName: 'Admin', isVideoCall: false),
+      ),
+    );
+  }
+
+  void _startVideoCall() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            const CallScreen(callerName: 'Admin', isVideoCall: true),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _socket.dispose();
@@ -137,13 +159,56 @@ class _ChatScreenState extends State<ChatScreen> {
               'VibeChat - $senderName',
               style: const TextStyle(
                 fontWeight: FontWeight.w700,
-                fontSize: 22,
+                fontSize: 20,
                 letterSpacing: 0.5,
                 color: Colors.white,
               ),
             ),
           ),
-          centerTitle: true,
+          centerTitle:
+              false, // 3. Set to false to accommodate header icons on the right
+          // 4. Added Phase 2 Header Action Icons (Audio Call, Video Call, Settings Gear)
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(top: 10.0),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(
+                      Icons.call_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                    onPressed: _startAudioCall,
+                    tooltip: 'Audio Call',
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.videocam_rounded,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                    onPressed: _startVideoCall,
+                    tooltip: 'Video Call',
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.settings_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Opening Settings...')),
+                      );
+                    },
+                    tooltip: 'Settings',
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
       // SafeArea protects the bottom input control from being blocked by Android navigation buttons

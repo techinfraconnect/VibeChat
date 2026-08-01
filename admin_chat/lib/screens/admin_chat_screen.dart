@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'call_screen.dart'; // 1. Added import for CallScreen
 
 class ChatScreen extends StatefulWidget {
   final String senderName; // Pass 'Client' or 'Admin'
@@ -94,10 +95,33 @@ class _ChatScreenState extends State<ChatScreen> {
     };
 
     // Send message to the Node.js backend.
-    // Removed local setState to prevent double-sending; the server echo handles insertion cleanly.
     _socket.emit('send_message', messageData);
 
     _controller.clear();
+  }
+
+  void _startAudioCall() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CallScreen(
+          callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
+          isVideoCall: false,
+        ),
+      ),
+    );
+  }
+
+  void _startVideoCall() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CallScreen(
+          callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
+          isVideoCall: true,
+        ),
+      ),
+    );
   }
 
   @override
@@ -137,13 +161,55 @@ class _ChatScreenState extends State<ChatScreen> {
               'VibeChat - ${widget.senderName}',
               style: const TextStyle(
                 fontWeight: FontWeight.w700,
-                fontSize: 22,
+                fontSize: 20,
                 letterSpacing: 0.5,
                 color: Colors.white,
               ),
             ),
           ),
-          centerTitle: true,
+          centerTitle: false, // 2. Set to false to leave space for action icons
+          // 3. Added Phase 2 action icons in header
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(top: 10.0),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(
+                      Icons.call_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                    onPressed: _startAudioCall,
+                    tooltip: 'Audio Call',
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.videocam_rounded,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                    onPressed: _startVideoCall,
+                    tooltip: 'Video Call',
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.settings_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Opening Settings...')),
+                      );
+                    },
+                    tooltip: 'Settings',
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
       body: SafeArea(
