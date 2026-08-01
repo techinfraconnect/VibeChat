@@ -34,7 +34,9 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
       ),
-      home: const ChatScreen(),
+      home: const ChatScreen(
+        senderName: 'Admin',
+      ), // <--- Fixed with required senderName
     );
   }
 }
