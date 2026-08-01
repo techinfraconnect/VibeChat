@@ -8,18 +8,14 @@ workflows:
     scripts:
       - name: Get Flutter Dependencies
         script: |
+          cd admin_chat
           flutter pub get
       - name: Build Unsigned iOS App & Package IPA
         script: |
           cd admin_chat
           flutter build ios --no-codesign --release
-          cd ios
           mkdir -p Payload
-          cd Payload
-          ln -s ../build/ios/iphoneos/Runner.app Runner.app
-          cd ..
+          cp -r build/ios/iphoneos/Runner.app Payload/
           zip -r AdminChat.ipa Payload
-          cp AdminChat.ipa ../../
     artifacts:
-      - AdminChat.ipa
       - admin_chat/*.ipa
