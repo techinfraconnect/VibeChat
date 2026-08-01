@@ -10,24 +10,47 @@ workflows:
         script: |
           cd admin_chat
           flutter pub get
-      - name: Build Unsigned iOS App & Package IPA
+      - name: The Two-Step Override Build & Package
         script: |
           cd admin_chat
           
-          # 1. Run the standard Flutter build (this will now work because entitlements are removed)
-          flutter build ios --release --no-codesign
+          # STEP 1: Let Flutter bundle the Dart code and assets.
+          # It will crash at the end during Apple's signing check, so we add "|| true" to ignore the crash and keep moving.
+          echo "Running standard Flutter build (expect a signing failure, this is intentional)..."
+          flutter build ios --release --no-codesign || true
           
-          # 2. Package the IPA
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            cd build/ios/iphoneos
+          # STEP 2: Use Apple's raw compiler to finish the build.
+          # We pass CODE_SIGNING_ALLOWED=NO to forcefully strip signing from the Runner AND all Firebase SPM plugins.
+          echo "Running raw Xcodebuild to override SPM and finish..."
+          cd ios
+          xcodebuild build \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="${PWD}/../build/ios" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+            
+          # STEP 3: Package the final output
+          cd ..
+          if [ -d "build/ios/Release-iphoneos/Runner.app" ]; then
             mkdir -p Payload
-            cp -r Runner.app Payload/
+            cp -r build/ios/Release-iphoneos/Runner.app Payload/
             zip -r AdminChat.ipa Payload
-            mv AdminChat.ipa ../../../
+            mv AdminChat.ipa ../
+            echo "Successfully packaged AdminChat.ipa!"
+          elif [ -d "build/ios/iphoneos/Runner.app" ]; then
+            # Fallback path just in case
+            mkdir -p Payload
+            cp -r build/ios/iphoneos/Runner.app Payload/
+            zip -r AdminChat.ipa Payload
+            mv AdminChat.ipa ../
             echo "Successfully packaged AdminChat.ipa!"
           else
-            echo "Error: Runner.app not found! Build failed."
+            echo "Error: Runner.app not found! Build completely failed."
             exit 1
           fi
     artifacts:
-      - admin_chat/AdminChat.ipa
+      - AdminChat.ipa
