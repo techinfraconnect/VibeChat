@@ -1,0 +1,21 @@
+workflows:
+  ios-unsigned-workflow:
+    name: iOS Unsigned Build
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Navigate to Admin Chat & Get Dependencies
+        script: |
+          cd admin_chat
+          flutter pub get
+      - name: Build Unsigned iOS App & Package IPA
+        script: |
+          cd admin_chat
+          flutter build ios --no-codesign
+          mkdir Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r AdminChat.ipa Payload
+    artifacts:
+      - admin_chat/*.ipa
