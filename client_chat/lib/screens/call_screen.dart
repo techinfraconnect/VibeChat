@@ -21,6 +21,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _isVideoOff = false;
   bool _isSpeakerOn = true;
   bool _isFrontCamera = true;
+  bool _isRemoteConnected = false;
 
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
@@ -29,7 +30,6 @@ class _CallScreenState extends State<CallScreen> {
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
 
-  // Free STUN servers for ICE candidate gathering
   final Map<String, dynamic> _iceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
@@ -40,22 +40,15 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
-    _initRenderersAndCall();
+    _initCallSession();
   }
 
-  Future<void> _initRenderersAndCall() async {
+  Future<void> _initCallSession() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
 
-    _connectSignalingSocket();
     await _startLocalStream();
-    _createPeerConnection();
-
-    // If caller is Admin, initiate the WebRTC Offer
-    if (widget.callerName == 'Client') {
-      // Admin calling client -> create offer
-      _createAndSendOffer();
-    }
+    _connectSignalingSocket();
   }
 
   void _connectSignalingSocket() {
@@ -67,10 +60,18 @@ class _CallScreenState extends State<CallScreen> {
       },
     );
 
-    _socket.onConnect((_) => print('🟢 Connected to Call Signaling Server'));
+    _socket.onConnect((_) async {
+      print('🟢 Connected to Call Signaling Server');
+      await _createPeerConnection();
+
+      // Automatically create and send an offer when joining the call session
+      RTCSessionDescription offer = await _peerConnection!.createOffer();
+      await _peerConnection!.setLocalDescription(offer);
+      _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
+    });
 
     _socket.on('offer', (data) async {
-      if (_peerConnection == null) return;
+      if (_peerConnection == null) await _createPeerConnection();
       await _peerConnection!.setRemoteDescription(
         RTCSessionDescription(data['sdp'], data['type']),
       );
@@ -120,26 +121,24 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
-  void _createPeerConnection() async {
+  Future<void> _createPeerConnection() async {
     _peerConnection = await createPeerConnection(_iceServers);
 
-    // Add local stream tracks to peer connection
     if (_localStream != null) {
       _localStream!.getTracks().forEach((track) {
         _peerConnection!.addTrack(track, _localStream!);
       });
     }
 
-    // Handle incoming remote stream tracks
     _peerConnection!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
         setState(() {
           _remoteRenderer.srcObject = event.streams[0];
+          _isRemoteConnected = true;
         });
       }
     };
 
-    // Gather ICE candidates and emit via socket
     _peerConnection!.onIceCandidate = (candidate) {
       if (candidate != null) {
         _socket.emit('ice-candidate', {
@@ -149,12 +148,6 @@ class _CallScreenState extends State<CallScreen> {
         });
       }
     };
-  }
-
-  Future<void> _createAndSendOffer() async {
-    RTCSessionDescription offer = await _peerConnection!.createOffer();
-    await _peerConnection!.setLocalDescription(offer);
-    _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
   }
 
   @override
@@ -190,12 +183,11 @@ class _CallScreenState extends State<CallScreen> {
     setState(() {
       _isSpeakerOn = !_isSpeakerOn;
     });
-    // Toggle speaker output routing via flutter_webrtc helper if needed
     Helper.setSpeakerphoneOn(_isSpeakerOn);
   }
 
   Future<void> _toggleCameraDirection() async {
-    if (_localStream != null) {
+    if (_localStream != null && widget.isVideoCall) {
       final videoTrack = _localStream!.getVideoTracks().first;
       await Helper.switchCamera(videoTrack);
       setState(() {
@@ -211,7 +203,7 @@ class _CallScreenState extends State<CallScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            widget.isVideoCall
+            widget.isVideoCall && _isRemoteConnected
                 ? Stack(
                     children: [
                       Positioned.fill(
@@ -286,11 +278,15 @@ class _CallScreenState extends State<CallScreen> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        const Text(
-                          "Connected Live",
+                        Text(
+                          _isRemoteConnected
+                              ? "Connected Live"
+                              : "Establishing Secure Call...",
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.greenAccent,
+                            color: _isRemoteConnected
+                                ? Colors.greenAccent
+                                : Colors.orangeAccent,
                           ),
                         ),
                       ],

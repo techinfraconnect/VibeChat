@@ -6,31 +6,25 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // Allows connections from any device or emulator
+    origin: "*",
   }
 });
 
 io.on('connection', (socket) => {
   console.log(`🟢 User connected: ${socket.id}`);
 
-  // Listen for messages sent from either Client or Admin
   socket.on('send_message', (data) => {
-    console.log('💬 Message received:', data);
-    
-    // Broadcast the message back out to everyone connected
     io.emit('receive_message', data);
   });
 
-  // ---------------------------------------------------------
-  // WebRTC Signaling Events for Audio/Video Calls
-  // ---------------------------------------------------------
+  // WebRTC Signaling Events
   socket.on('offer', (data) => {
-    console.log('📞 Call offer received');
+    console.log('📞 Offer received, broadcasting to peer...');
     socket.broadcast.emit('offer', data);
   });
 
   socket.on('answer', (data) => {
-    console.log('📞 Call answer received');
+    console.log('📞 Answer received, broadcasting to peer...');
     socket.broadcast.emit('answer', data);
   });
 
@@ -39,7 +33,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('end-call', () => {
-    console.log('📴 Call ended');
+    console.log('📴 Call ended by a user');
     socket.broadcast.emit('end-call');
   });
 
