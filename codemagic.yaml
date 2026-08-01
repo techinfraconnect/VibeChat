@@ -2,40 +2,17 @@ workflows:
   ios-unsigned-workflow:
     name: iOS Unsigned Build
     max_build_duration: 60
+    working_directory: admin_chat
     environment:
       flutter: stable
       xcode: latest
     scripts:
-      - name: The CocoaPods Override Build
+      - name: Generate iOS Platform and Build
         script: |
-          cd admin_chat
-          
-          # 1. KILL APPLE'S SPM: Force Firebase to use CocoaPods
-          flutter config --no-enable-swift-package-manager
-          
-          # 2. Clean out the old SPM cache
-          rm -rf ios/.symlinks ios/Pods ios/Podfile.lock
+          flutter create . --platforms=ios
           flutter clean
           flutter pub get
-          
-          # 3. Inject the CocoaPods signing bypass directly into the Podfile
-          awk '/flutter_additional_ios_build_settings\(target\)/ { print; print "      config.build_settings[\"CODE_SIGNING_ALLOWED\"] = \"NO\"\n      config.build_settings[\"CODE_SIGNING_REQUIRED\"] = \"NO\"\n      config.build_settings[\"CODE_SIGN_IDENTITY\"] = \"\""; next }1' ios/Podfile > tmp && mv tmp ios/Podfile
-          
-          # 4. Standard build (CocoaPods will now compile the actual code without demanding a cert)
-          echo "Building full app with CocoaPods..."
           flutter build ios --release --no-codesign
-          
-          # 5. Package the actual payload
-          cd build/ios/iphoneos
-          if [ -d "Runner.app" ]; then
-            mkdir -p Payload
-            cp -r Runner.app Payload/
-            zip -r AdminChat.ipa Payload
-            mv AdminChat.ipa ../../../
-            echo "Successfully packaged full-size AdminChat.ipa!"
-          else
-            echo "Error: Runner.app not found! Build failed."
-            exit 1
-          fi
     artifacts:
-      - admin_chat/AdminChat.ipa
+      - build/ios/iphoneos/*.app
+      - build/ios/ipa/*.ipa
