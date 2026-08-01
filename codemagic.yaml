@@ -7,12 +7,12 @@ workflows:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Generate iOS Platform and Build
+      - name: Build Unsigned iOS App
         script: |
           flutter create . --platforms=ios
           flutter clean
           flutter pub get
-          flutter build ios --release --no-codesign
+          # Build for simulator/generic device architecture without archive signing checks
+          flutter build ios --simulator --release
     artifacts:
-      - build/ios/iphoneos/*.app
-      - build/ios/ipa/*.ipa
+      - build/ios/iphonesimulator/*.app
