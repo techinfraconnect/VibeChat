@@ -13,16 +13,14 @@ workflows:
       - name: Build Unsigned iOS App & Package IPA
         script: |
           cd admin_chat
-          # Build for simulator release (bypasses device code-signing requirements)
-          flutter build ios --release --simulator --no-codesign
+          # Build unsigned for device using profile or default mode to bypass strict release signing checks
+          flutter build ios --profile --no-codesign
           
           # Create Payload directory
           mkdir -p Payload
           
           # Copy the built app bundle into Payload
-          if [ -d "build/ios/iphonesimulator/Runner.app" ]; then
-            cp -r build/ios/iphonesimulator/Runner.app Payload/
-          elif [ -d "build/ios/iphoneos/Runner.app" ]; then
+          if [ -d "build/ios/iphoneos/Runner.app" ]; then
             cp -r build/ios/iphoneos/Runner.app Payload/
           else
             echo "Error: Runner.app not found!"
