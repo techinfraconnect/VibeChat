@@ -6,26 +6,40 @@ workflows:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Build Unsigned iOS App & Package IPA
+      - name: Get Dependencies
         script: |
           cd admin_chat
+          flutter pub get
+      - name: Raw Apple Compiler Override & Package IPA
+        script: |
+          cd admin_chat/ios
           
-          # Force Xcode to skip code signing
-          echo "CODE_SIGNING_ALLOWED = NO" >> ios/Flutter/Generated.xcconfig
-          echo "CODE_SIGNING_REQUIRED = NO" >> ios/Flutter/Generated.xcconfig
-          echo "CODE_SIGN_IDENTITY = " >> ios/Flutter/Generated.xcconfig
+          # 1. Bypass Flutter CLI and run the raw Apple compiler.
+          # Command-line flags have the highest precedence and will force-disable signing on ALL plugins (Firebase, etc).
+          xcodebuild build \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+            
+          # 2. Navigate back to project root and create Payload folder
+          cd ..
+          mkdir -p Payload
           
-          # Build the app without codesign
-          flutter build ios --release --no-codesign
+          # 3. Dynamically find the built Runner.app (xcodebuild paths can vary slightly)
+          APP_DIR=$(find . -name "Runner.app" -type d | head -n 1)
           
-          # Check if the build succeeded and package it
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            mkdir -p Payload
-            cp -r build/ios/iphoneos/Runner.app Payload/
+          if [ -n "$APP_DIR" ]; then
+            echo "Success: Unsigned app found at $APP_DIR"
+            cp -r "$APP_DIR" Payload/
             zip -r AdminChat.ipa Payload
             cp AdminChat.ipa ../
           else
-            echo "Error: Runner.app not found! Build failed."
+            echo "Error: Runner.app still not found! Build failed."
             exit 1
           fi
     artifacts:
