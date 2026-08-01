@@ -6,42 +6,36 @@ workflows:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Get Dependencies
+      - name: The CocoaPods Override Build
         script: |
           cd admin_chat
+          
+          # 1. KILL APPLE'S SPM: Force Firebase to use CocoaPods
+          flutter config --no-enable-swift-package-manager
+          
+          # 2. Clean out the old SPM cache
+          rm -rf ios/.symlinks ios/Pods ios/Podfile.lock
+          flutter clean
           flutter pub get
-      - name: The Two-Step Override Build & Package
-        script: |
-          cd admin_chat
           
-          # STEP 1: Let Flutter setup the environment (ignore the signing crash)
-          echo "Running standard Flutter build to setup environment..."
-          flutter build ios --release --no-codesign || true
+          # 3. Inject the CocoaPods signing bypass directly into the Podfile
+          awk '/flutter_additional_ios_build_settings\(target\)/ { print; print "      config.build_settings[\"CODE_SIGNING_ALLOWED\"] = \"NO\"\n      config.build_settings[\"CODE_SIGNING_REQUIRED\"] = \"NO\"\n      config.build_settings[\"CODE_SIGN_IDENTITY\"] = \"\""; next }1' ios/Podfile > tmp && mv tmp ios/Podfile
           
-          # STEP 2: Use raw Xcodebuild and FORCE the output to a custom directory
-          echo "Running raw Xcodebuild to compile real binary..."
-          cd ios
-          xcodebuild build \
-            -workspace Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -sdk iphoneos \
-            CONFIGURATION_BUILD_DIR="${PWD}/build/RealOutput" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-            
-          # STEP 3: Package the final output from the RealOutput folder
-          cd ..
-          if [ -d "ios/build/RealOutput/Runner.app" ]; then
+          # 4. Standard build (CocoaPods will now compile the actual code without demanding a cert)
+          echo "Building full app with CocoaPods..."
+          flutter build ios --release --no-codesign
+          
+          # 5. Package the actual payload
+          cd build/ios/iphoneos
+          if [ -d "Runner.app" ]; then
             mkdir -p Payload
-            cp -r ios/build/RealOutput/Runner.app Payload/
+            cp -r Runner.app Payload/
             zip -r AdminChat.ipa Payload
-            mv AdminChat.ipa ../
+            mv AdminChat.ipa ../../../
             echo "Successfully packaged full-size AdminChat.ipa!"
           else
-            echo "Error: Fully compiled Runner.app not found! Build failed."
+            echo "Error: Runner.app not found! Build failed."
             exit 1
           fi
     artifacts:
-      - AdminChat.ipa
+      - admin_chat/AdminChat.ipa
