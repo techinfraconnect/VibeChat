@@ -6,16 +6,20 @@ workflows:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Navigate to Admin Chat & Get Dependencies
+      - name: Get Flutter Dependencies
         script: |
-          cd admin_chat
           flutter pub get
       - name: Build Unsigned iOS App & Package IPA
         script: |
           cd admin_chat
-          flutter build ios --no-codesign
-          mkdir Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
+          flutter build ios --no-codesign --release
+          cd ios
+          mkdir -p Payload
+          cd Payload
+          ln -s ../build/ios/iphoneos/Runner.app Runner.app
+          cd ..
           zip -r AdminChat.ipa Payload
+          cp AdminChat.ipa ../../
     artifacts:
+      - AdminChat.ipa
       - admin_chat/*.ipa
