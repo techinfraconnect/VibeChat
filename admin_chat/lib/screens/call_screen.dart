@@ -5,11 +5,14 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 class CallScreen extends StatefulWidget {
   final String callerName;
   final bool isVideoCall;
+  final bool
+  isCaller; // true if this device initiated the call, false if receiving
 
   const CallScreen({
     super.key,
     required this.callerName,
     required this.isVideoCall,
+    required this.isCaller,
   });
 
   @override
@@ -61,16 +64,21 @@ class _CallScreenState extends State<CallScreen> {
     );
 
     _socket.onConnect((_) async {
-      print('🟢 Connected to Call Signaling Server');
+      print(
+        '🟢 Connected to Call Signaling Server (isCaller: ${widget.isCaller})',
+      );
       await _createPeerConnection();
 
-      // Automatically create and send an offer when joining the call session
-      RTCSessionDescription offer = await _peerConnection!.createOffer();
-      await _peerConnection!.setLocalDescription(offer);
-      _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
+      // ONLY the device that initiated the call creates and sends the offer
+      if (widget.isCaller) {
+        RTCSessionDescription offer = await _peerConnection!.createOffer();
+        await _peerConnection!.setLocalDescription(offer);
+        _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
+      }
     });
 
     _socket.on('offer', (data) async {
+      // If this device is the receiver, handle the incoming offer
       if (_peerConnection == null) await _createPeerConnection();
       await _peerConnection!.setRemoteDescription(
         RTCSessionDescription(data['sdp'], data['type']),

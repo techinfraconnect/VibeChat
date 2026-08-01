@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'call_screen.dart'; // 1. Added import for the Phase 2 Call Screen
+import 'call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -12,7 +12,6 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  // Hardcoded sender name for the client app
   final String senderName = 'Client';
 
   late IO.Socket _socket;
@@ -26,7 +25,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _connectSocket();
   }
 
-  // Load saved messages from local storage when app opens
   Future<void> _loadStoredMessages() async {
     final prefs = await SharedPreferences.getInstance();
     final String? storedData = prefs.getString('client_chat_messages');
@@ -40,7 +38,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // Save messages to local storage
   Future<void> _saveMessages() async {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('client_chat_messages', jsonEncode(_messages));
@@ -61,11 +58,9 @@ class _ChatScreenState extends State<ChatScreen> {
       print('🟢 Connected to server');
     });
 
-    // Listen for incoming messages broadcasted from the server
     _socket.on('receive_message', (data) {
       final incomingMessage = Map<String, dynamic>.from(data);
       setState(() {
-        // Prevent duplicate entries if already present based on timestamp & text
         bool exists = _messages.any(
           (m) =>
               m['timestamp'] == incomingMessage['timestamp'] &&
@@ -92,19 +87,20 @@ class _ChatScreenState extends State<ChatScreen> {
       'timestamp': DateTime.now().toIso8601String(),
     };
 
-    // Send message to the Node.js backend (Server will broadcast back, avoiding double entry)
     _socket.emit('send_message', messageData);
-
     _controller.clear();
   }
 
-  // 2. Added Phase 2 Call triggers
+  // Updated with isCaller: true
   void _startAudioCall() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            const CallScreen(callerName: 'Admin', isVideoCall: false),
+        builder: (context) => const CallScreen(
+          callerName: 'Admin',
+          isVideoCall: false,
+          isCaller: true,
+        ),
       ),
     );
   }
@@ -113,8 +109,11 @@ class _ChatScreenState extends State<ChatScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            const CallScreen(callerName: 'Admin', isVideoCall: true),
+        builder: (context) => const CallScreen(
+          callerName: 'Admin',
+          isVideoCall: true,
+          isCaller: true,
+        ),
       ),
     );
   }
@@ -129,9 +128,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(
-        0xFFF4F7FC,
-      ), // Soft, premium off-white background
+      backgroundColor: const Color(0xFFF4F7FC),
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(70.0),
         child: AppBar(
@@ -140,16 +137,11 @@ class _ChatScreenState extends State<ChatScreen> {
           flexibleSpace: Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  Color(0xFF4A00E0),
-                  Color(0xFF8E2DE2),
-                ], // Vibrant iOS-style gradient
+                colors: [Color(0xFF4A00E0), Color(0xFF8E2DE2)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-              borderRadius: BorderRadius.vertical(
-                bottom: Radius.circular(25), // Smooth rounded bottom edges
-              ),
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(25)),
             ),
           ),
           backgroundColor: Colors.transparent,
@@ -165,9 +157,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          centerTitle:
-              false, // 3. Set to false to accommodate header icons on the right
-          // 4. Added Phase 2 Header Action Icons (Audio Call, Video Call, Settings Gear)
+          centerTitle: false,
           actions: [
             Padding(
               padding: const EdgeInsets.only(top: 10.0),
@@ -211,13 +201,9 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
-      // SafeArea protects the bottom input control from being blocked by Android navigation buttons
       body: SafeArea(
         child: Column(
           children: [
-            // ---------------------------------------------------------
-            // CHAT MESSAGES AREA
-            // ---------------------------------------------------------
             Expanded(
               child: _messages.isEmpty
                   ? const Center(
@@ -227,8 +213,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     )
                   : ListView.builder(
-                      reverse:
-                          true, // Keeps newest messages at the bottom/viewable
+                      reverse: true,
                       itemCount: _messages.length,
                       itemBuilder: (context, index) {
                         final msg = _messages[index];
@@ -287,10 +272,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       },
                     ),
             ),
-
-            // ---------------------------------------------------------
-            // GLOSSY FLOATING INPUT BAR
-            // ---------------------------------------------------------
             Container(
               margin: const EdgeInsets.only(
                 left: 16.0,
@@ -300,13 +281,13 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(40), // Perfect pill shape
+                borderRadius: BorderRadius.circular(40),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withOpacity(0.08),
                     blurRadius: 20,
                     spreadRadius: 2,
-                    offset: const Offset(0, 5), // Soft floating shadow
+                    offset: const Offset(0, 5),
                   ),
                 ],
               ),

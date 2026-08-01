@@ -2,10 +2,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'call_screen.dart'; // 1. Added import for CallScreen
+import 'call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
-  final String senderName; // Pass 'Client' or 'Admin'
+  final String senderName;
   const ChatScreen({super.key, required this.senderName});
 
   @override
@@ -24,7 +24,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _connectSocket();
   }
 
-  // Load saved chat history from local device storage
   Future<void> _loadStoredMessages() async {
     final prefs = await SharedPreferences.getInstance();
     final String storageKey =
@@ -40,7 +39,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // Save chat history to local device storage
   Future<void> _saveMessages() async {
     final prefs = await SharedPreferences.getInstance();
     final String storageKey =
@@ -63,11 +61,9 @@ class _ChatScreenState extends State<ChatScreen> {
       print('🟢 Connected to server');
     });
 
-    // Listen for incoming messages broadcasted from the server
     _socket.on('receive_message', (data) {
       final incomingMessage = Map<String, dynamic>.from(data);
       setState(() {
-        // Prevent duplicate entries if already present
         bool exists = _messages.any(
           (m) =>
               m['timestamp'] == incomingMessage['timestamp'] &&
@@ -94,12 +90,11 @@ class _ChatScreenState extends State<ChatScreen> {
       'timestamp': DateTime.now().toIso8601String(),
     };
 
-    // Send message to the Node.js backend.
     _socket.emit('send_message', messageData);
-
     _controller.clear();
   }
 
+  // Updated with isCaller: true
   void _startAudioCall() {
     Navigator.push(
       context,
@@ -107,6 +102,7 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (context) => CallScreen(
           callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
           isVideoCall: false,
+          isCaller: true,
         ),
       ),
     );
@@ -119,6 +115,7 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (context) => CallScreen(
           callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
           isVideoCall: true,
+          isCaller: true,
         ),
       ),
     );
@@ -167,8 +164,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          centerTitle: false, // 2. Set to false to leave space for action icons
-          // 3. Added Phase 2 action icons in header
+          centerTitle: false,
           actions: [
             Padding(
               padding: const EdgeInsets.only(top: 10.0),
