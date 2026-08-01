@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class ChatScreen extends StatefulWidget {
@@ -12,12 +14,37 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   late IO.Socket _socket;
   final TextEditingController _controller = TextEditingController();
-  final List<Map<String, dynamic>> _messages = [];
+  List<Map<String, dynamic>> _messages = [];
 
   @override
   void initState() {
     super.initState();
+    _loadStoredMessages();
     _connectSocket();
+  }
+
+  // Load saved chat history from local device storage
+  Future<void> _loadStoredMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String storageKey =
+        '${widget.senderName.toLowerCase()}_chat_messages';
+    final String? storedData = prefs.getString(storageKey);
+    if (storedData != null) {
+      final List decodedList = jsonDecode(storedData);
+      setState(() {
+        _messages = decodedList
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      });
+    }
+  }
+
+  // Save chat history to local device storage
+  Future<void> _saveMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String storageKey =
+        '${widget.senderName.toLowerCase()}_chat_messages';
+    prefs.setString(storageKey, jsonEncode(_messages));
   }
 
   void _connectSocket() {
@@ -39,7 +66,18 @@ class _ChatScreenState extends State<ChatScreen> {
     _socket.on('receive_message', (data) {
       final incomingMessage = Map<String, dynamic>.from(data);
       setState(() {
-        _messages.insert(0, incomingMessage);
+        // Prevent duplicate entries if already present
+        bool exists = _messages.any(
+          (m) =>
+              m['timestamp'] == incomingMessage['timestamp'] &&
+              m['text'] == incomingMessage['text'] &&
+              m['sender'] == incomingMessage['sender'],
+        );
+
+        if (!exists) {
+          _messages.insert(0, incomingMessage);
+          _saveMessages();
+        }
       });
     });
 
@@ -55,12 +93,8 @@ class _ChatScreenState extends State<ChatScreen> {
       'timestamp': DateTime.now().toIso8601String(),
     };
 
-    // Instant local UI feedback so the message pops up immediately
-    setState(() {
-      _messages.insert(0, messageData);
-    });
-
-    // Send message to the Node.js backend
+    // Send message to the Node.js backend.
+    // Removed local setState to prevent double-sending; the server echo handles insertion cleanly.
     _socket.emit('send_message', messageData);
 
     _controller.clear();
@@ -83,13 +117,17 @@ class _ChatScreenState extends State<ChatScreen> {
           elevation: 10,
           shadowColor: Colors.black.withOpacity(0.3),
           flexibleSpace: Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [Color(0xFF4A00E0), Color(0xFF8E2DE2)],
+                colors: widget.senderName == 'Admin'
+                    ? [const Color(0xFF11998e), const Color(0xFF38ef7d)]
+                    : [const Color(0xFF4A00E0), const Color(0xFF8E2DE2)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(25)),
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(25),
+              ),
             ),
           ),
           backgroundColor: Colors.transparent,
@@ -141,7 +179,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                             decoration: BoxDecoration(
                               color: isMe
-                                  ? const Color(0xFF6C63FF)
+                                  ? (widget.senderName == 'Admin'
+                                        ? const Color(0xFF11998e)
+                                        : const Color(0xFF6C63FF))
                                   : Colors.white,
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
@@ -217,9 +257,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   Container(
                     margin: const EdgeInsets.all(6.0),
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFF4A00E0), Color(0xFF8E2DE2)],
+                        colors: widget.senderName == 'Admin'
+                            ? [const Color(0xFF11998e), const Color(0xFF38ef7d)]
+                            : [
+                                const Color(0xFF4A00E0),
+                                const Color(0xFF8E2DE2),
+                              ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
