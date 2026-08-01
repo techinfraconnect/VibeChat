@@ -13,23 +13,26 @@ workflows:
       - name: Build Unsigned iOS App & Package IPA
         script: |
           cd admin_chat
-          # Build unsigned for device using profile or default mode to bypass strict release signing checks
-          flutter build ios --profile --no-codesign
           
-          # Create Payload directory
+          # 1. FORCE Xcode to completely ignore code signing by injecting overrides directly
+          echo "CODE_SIGNING_ALLOWED = NO" >> ios/Flutter/Generated.xcconfig
+          echo "CODE_SIGNING_REQUIRED = NO" >> ios/Flutter/Generated.xcconfig
+          echo "CODE_SIGN_IDENTITY = " >> ios/Flutter/Generated.xcconfig
+          echo "CODE_SIGN_ENTITLEMENTS = " >> ios/Flutter/Generated.xcconfig
+          
+          # 2. Build the release app for devices (iphoneos)
+          flutter build ios --release --no-codesign
+          
+          # 3. Package the IPA
           mkdir -p Payload
-          
-          # Copy the built app bundle into Payload
           if [ -d "build/ios/iphoneos/Runner.app" ]; then
             cp -r build/ios/iphoneos/Runner.app Payload/
+            zip -r AdminChat.ipa Payload
+            cp AdminChat.ipa ../
           else
-            echo "Error: Runner.app not found!"
+            echo "Error: Runner.app not found! Build failed."
             exit 1
           fi
-          
-          # Zip it into a valid IPA file
-          zip -r AdminChat.ipa Payload
-          cp AdminChat.ipa ../
     artifacts:
       - AdminChat.ipa
       - admin_chat/*.ipa
