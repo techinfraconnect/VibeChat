@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class CallScreen extends StatefulWidget {
   final String callerName;
@@ -24,52 +25,198 @@ class _CallScreenState extends State<CallScreen> {
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
 
+  late IO.Socket _socket;
+  RTCPeerConnection? _peerConnection;
+  MediaStream? _localStream;
+
+  // Free STUN servers for ICE candidate gathering
+  final Map<String, dynamic> _iceServers = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+    ],
+  };
+
   @override
   void initState() {
     super.initState();
-    if (widget.isVideoCall) {
-      _initRenderers();
+    _initRenderersAndCall();
+  }
+
+  Future<void> _initRenderersAndCall() async {
+    await _localRenderer.initialize();
+    await _remoteRenderer.initialize();
+
+    _connectSignalingSocket();
+    await _startLocalStream();
+    _createPeerConnection();
+
+    // If caller is Admin, initiate the WebRTC Offer
+    if (widget.callerName == 'Client') {
+      // Admin calling client -> create offer
+      _createAndSendOffer();
     }
   }
 
-  Future<void> _initRenderers() async {
-    await _localRenderer.initialize();
-    await _remoteRenderer.initialize();
-    // WebRTC stream initialization hooks go here for production WebRTC signaling
+  void _connectSignalingSocket() {
+    _socket = IO.io(
+      'https://vibechat-server-vo3f.onrender.com',
+      <String, dynamic>{
+        'transports': ['websocket'],
+        'autoConnect': true,
+      },
+    );
+
+    _socket.onConnect((_) => print('🟢 Connected to Call Signaling Server'));
+
+    _socket.on('offer', (data) async {
+      if (_peerConnection == null) return;
+      await _peerConnection!.setRemoteDescription(
+        RTCSessionDescription(data['sdp'], data['type']),
+      );
+      RTCSessionDescription answer = await _peerConnection!.createAnswer();
+      await _peerConnection!.setLocalDescription(answer);
+      _socket.emit('answer', {'type': answer.type, 'sdp': answer.sdp});
+    });
+
+    _socket.on('answer', (data) async {
+      await _peerConnection?.setRemoteDescription(
+        RTCSessionDescription(data['sdp'], data['type']),
+      );
+    });
+
+    _socket.on('ice-candidate', (data) async {
+      if (data != null && _peerConnection != null) {
+        RTCIceCandidate candidate = RTCIceCandidate(
+          data['candidate'],
+          data['sdpMid'],
+          data['sdpMLineIndex'],
+        );
+        await _peerConnection!.addCandidate(candidate);
+      }
+    });
+
+    _socket.on('end-call', (_) {
+      if (mounted) Navigator.pop(context);
+    });
+  }
+
+  Future<void> _startLocalStream() async {
+    final Map<String, dynamic> mediaConstraints = {
+      'audio': true,
+      'video': widget.isVideoCall
+          ? {'facingMode': _isFrontCamera ? 'user' : 'environment'}
+          : false,
+    };
+
+    try {
+      _localStream = await navigator.mediaDevices.getUserMedia(
+        mediaConstraints,
+      );
+      _localRenderer.srcObject = _localStream;
+      setState(() {});
+    } catch (e) {
+      print('Error accessing media devices: $e');
+    }
+  }
+
+  void _createPeerConnection() async {
+    _peerConnection = await createPeerConnection(_iceServers);
+
+    // Add local stream tracks to peer connection
+    if (_localStream != null) {
+      _localStream!.getTracks().forEach((track) {
+        _peerConnection!.addTrack(track, _localStream!);
+      });
+    }
+
+    // Handle incoming remote stream tracks
+    _peerConnection!.onTrack = (event) {
+      if (event.streams.isNotEmpty) {
+        setState(() {
+          _remoteRenderer.srcObject = event.streams[0];
+        });
+      }
+    };
+
+    // Gather ICE candidates and emit via socket
+    _peerConnection!.onIceCandidate = (candidate) {
+      if (candidate != null) {
+        _socket.emit('ice-candidate', {
+          'candidate': candidate.candidate,
+          'sdpMid': candidate.sdpMid,
+          'sdpMLineIndex': candidate.sdpMLineIndex,
+        });
+      }
+    };
+  }
+
+  Future<void> _createAndSendOffer() async {
+    RTCSessionDescription offer = await _peerConnection!.createOffer();
+    await _peerConnection!.setLocalDescription(offer);
+    _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
   }
 
   @override
   void dispose() {
-    if (widget.isVideoCall) {
-      _localRenderer.dispose();
-      _remoteRenderer.dispose();
-    }
+    _socket.emit('end-call');
+    _localStream?.dispose();
+    _peerConnection?.dispose();
+    _localRenderer.dispose();
+    _remoteRenderer.dispose();
+    _socket.dispose();
     super.dispose();
   }
 
-  void _toggleCameraDirection() {
+  void _toggleMic() {
     setState(() {
-      _isFrontCamera = !_isFrontCamera;
+      _isMuted = !_isMuted;
     });
-    // Switch camera logic for flutter_webrtc
+    _localStream?.getAudioTracks().forEach((track) {
+      track.enabled = !_isMuted;
+    });
+  }
+
+  void _toggleVideo() {
+    setState(() {
+      _isVideoOff = !_isVideoOff;
+    });
+    _localStream?.getVideoTracks().forEach((track) {
+      track.enabled = !_isVideoOff;
+    });
+  }
+
+  void _toggleSpeaker() {
+    setState(() {
+      _isSpeakerOn = !_isSpeakerOn;
+    });
+    // Toggle speaker output routing via flutter_webrtc helper if needed
+    Helper.setSpeakerphoneOn(_isSpeakerOn);
+  }
+
+  Future<void> _toggleCameraDirection() async {
+    if (_localStream != null) {
+      final videoTrack = _localStream!.getVideoTracks().first;
+      await Helper.switchCamera(videoTrack);
+      setState(() {
+        _isFrontCamera = !_isFrontCamera;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F), // Dark charcoal MS Teams theme
+      backgroundColor: const Color(0xFF1F1F1F),
       body: SafeArea(
         child: Stack(
           children: [
-            // Video Stream View or Audio Avatar View
             widget.isVideoCall
                 ? Stack(
                     children: [
-                      // Remote Fullscreen Video Stream
                       Positioned.fill(
                         child: RTCVideoView(_remoteRenderer, mirror: false),
                       ),
-                      // Local Participant Picture-in-Picture (PiP) Floating Frame
                       Positioned(
                         top: 20,
                         right: 20,
@@ -86,7 +233,6 @@ class _CallScreenState extends State<CallScreen> {
                           ),
                         ),
                       ),
-                      // Camera Flip Button
                       Positioned(
                         top: 20,
                         left: 20,
@@ -105,7 +251,6 @@ class _CallScreenState extends State<CallScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        // Caller Identity Display with Gradient Ring
                         Container(
                           padding: const EdgeInsets.all(4),
                           decoration: const BoxDecoration(
@@ -142,14 +287,16 @@ class _CallScreenState extends State<CallScreen> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          "01:09", // Active call elapsed timer
-                          style: TextStyle(fontSize: 14, color: Colors.white60),
+                          "Connected Live",
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.greenAccent,
+                          ),
                         ),
                       ],
                     ),
                   ),
 
-            // Streamlined Control Bar & End Call Button
             Positioned(
               bottom: 30,
               left: 20,
@@ -175,31 +322,29 @@ class _CallScreenState extends State<CallScreen> {
                               : Icons.mic_rounded,
                           label: _isMuted ? 'Muted' : 'Mic On',
                           isActive: _isMuted,
-                          onPressed: () => setState(() => _isMuted = !_isMuted),
+                          onPressed: _toggleMic,
                         ),
-                        _buildControlButton(
-                          icon: _isVideoOff
-                              ? Icons.videocam_off_rounded
-                              : Icons.videocam_rounded,
-                          label: _isVideoOff ? 'Video Off' : 'Video On',
-                          isActive: _isVideoOff,
-                          onPressed: () =>
-                              setState(() => _isVideoOff = !_isVideoOff),
-                        ),
+                        if (widget.isVideoCall)
+                          _buildControlButton(
+                            icon: _isVideoOff
+                                ? Icons.videocam_off_rounded
+                                : Icons.videocam_rounded,
+                            label: _isVideoOff ? 'Video Off' : 'Video On',
+                            isActive: _isVideoOff,
+                            onPressed: _toggleVideo,
+                          ),
                         _buildControlButton(
                           icon: _isSpeakerOn
                               ? Icons.volume_up_rounded
                               : Icons.hearing_rounded,
                           label: 'Speaker',
                           isActive: false,
-                          onPressed: () =>
-                              setState(() => _isSpeakerOn = !_isSpeakerOn),
+                          onPressed: _toggleSpeaker,
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 20),
-                  // Distinctive Prominent Red End Call Button
                   SizedBox(
                     width: double.infinity,
                     height: 50,

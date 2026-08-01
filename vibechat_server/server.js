@@ -21,12 +21,34 @@ io.on('connection', (socket) => {
     io.emit('receive_message', data);
   });
 
+  // ---------------------------------------------------------
+  // WebRTC Signaling Events for Audio/Video Calls
+  // ---------------------------------------------------------
+  socket.on('offer', (data) => {
+    console.log('📞 Call offer received');
+    socket.broadcast.emit('offer', data);
+  });
+
+  socket.on('answer', (data) => {
+    console.log('📞 Call answer received');
+    socket.broadcast.emit('answer', data);
+  });
+
+  socket.on('ice-candidate', (data) => {
+    socket.broadcast.emit('ice-candidate', data);
+  });
+
+  socket.on('end-call', () => {
+    console.log('📴 Call ended');
+    socket.broadcast.emit('end-call');
+  });
+
   socket.on('disconnect', () => {
     console.log(`🔴 User disconnected: ${socket.id}`);
   });
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 VibeChat WebSocket Server running on port ${PORT}`);
 });
