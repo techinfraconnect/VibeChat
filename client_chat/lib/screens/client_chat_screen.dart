@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -8,16 +9,72 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  // TODO: Keep your existing TextEditingController and state variables here
-  final TextEditingController _messageController = TextEditingController();
+  // Hardcoded sender name for the client app
+  final String senderName = 'Client';
 
-  // TODO: Keep your existing sendMessage function here
+  late IO.Socket _socket;
+  final TextEditingController _controller = TextEditingController();
+  final List<Map<String, dynamic>> _messages = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _connectSocket();
+  }
+
+  void _connectSocket() {
+    _socket = IO.io(
+      'https://vibechat-server-vo3f.onrender.com',
+      <String, dynamic>{
+        'transports': ['websocket'],
+        'autoConnect': false,
+      },
+    );
+
+    _socket.connect();
+
+    _socket.onConnect((_) {
+      print('🟢 Connected to server');
+    });
+
+    // Listen for incoming messages broadcasted from the server
+    _socket.on('receive_message', (data) {
+      final incomingMessage = Map<String, dynamic>.from(data);
+      // Avoid duplicate local display if we already added our own message instantly
+      setState(() {
+        // Check if message already exists to prevent duplicate entries
+        _messages.insert(0, incomingMessage);
+      });
+    });
+
+    _socket.onDisconnect((_) => print('🔴 Disconnected'));
+  }
+
   void _sendMessage() {
-    if (_messageController.text.trim().isNotEmpty) {
-      // Your socket send logic goes here
-      print("Sending: ${_messageController.text}");
-      _messageController.clear();
-    }
+    if (_controller.text.trim().isEmpty) return;
+
+    final messageData = {
+      'text': _controller.text,
+      'sender': senderName,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+
+    // Instant local UI feedback so the message pops up immediately
+    setState(() {
+      _messages.insert(0, messageData);
+    });
+
+    // Send message to the Node.js backend
+    _socket.emit('send_message', messageData);
+
+    _controller.clear();
+  }
+
+  @override
+  void dispose() {
+    _socket.dispose();
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
@@ -26,7 +83,6 @@ class _ChatScreenState extends State<ChatScreen> {
       backgroundColor: const Color(
         0xFFF4F7FC,
       ), // Soft, premium off-white background
-      // By default, resizeToAvoidBottomInset is true, which automatically pushes the UI up when the keyboard opens.
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(70.0),
         child: AppBar(
@@ -48,13 +104,13 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           backgroundColor: Colors.transparent,
-          title: const Padding(
-            padding: EdgeInsets.only(top: 10.0),
+          title: Padding(
+            padding: const EdgeInsets.only(top: 10.0),
             child: Text(
-              'VibeChat',
-              style: TextStyle(
+              'VibeChat - $senderName',
+              style: const TextStyle(
                 fontWeight: FontWeight.w700,
-                fontSize: 24,
+                fontSize: 22,
                 letterSpacing: 0.5,
                 color: Colors.white,
               ),
@@ -63,7 +119,7 @@ class _ChatScreenState extends State<ChatScreen> {
           centerTitle: true,
         ),
       ),
-      // THE FIX: SafeArea prevents the Android navigation buttons from overlapping the text box
+      // SafeArea protects the bottom input control from being blocked by Android navigation buttons
       body: SafeArea(
         child: Column(
           children: [
@@ -71,15 +127,73 @@ class _ChatScreenState extends State<ChatScreen> {
             // CHAT MESSAGES AREA
             // ---------------------------------------------------------
             Expanded(
-              child: Container(
-                // TODO: Replace this child with your existing ListView.builder for messages
-                child: const Center(
-                  child: Text(
-                    "No messages yet...",
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                ),
-              ),
+              child: _messages.isEmpty
+                  ? const Center(
+                      child: Text(
+                        "No messages yet. Start chatting!",
+                        style: TextStyle(color: Colors.grey, fontSize: 16),
+                      ),
+                    )
+                  : ListView.builder(
+                      reverse:
+                          true, // Keeps newest messages at the bottom/viewable
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) {
+                        final msg = _messages[index];
+                        final isMe = msg['sender'] == senderName;
+
+                        return Align(
+                          alignment: isMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(
+                              vertical: 6,
+                              horizontal: 16,
+                            ),
+                            padding: const EdgeInsets.all(12),
+                            constraints: BoxConstraints(
+                              maxWidth:
+                                  MediaQuery.of(context).size.width * 0.75,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isMe
+                                  ? const Color(0xFF6C63FF)
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 5,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  msg['sender'] ?? '',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 10,
+                                    color: isMe ? Colors.white70 : Colors.grey,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  msg['text'] ?? '',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    color: isMe ? Colors.white : Colors.black87,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
             ),
 
             // ---------------------------------------------------------
@@ -109,7 +223,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   const SizedBox(width: 20),
                   Expanded(
                     child: TextField(
-                      controller: _messageController,
+                      controller: _controller,
                       style: const TextStyle(
                         fontSize: 16,
                         color: Colors.black87,
