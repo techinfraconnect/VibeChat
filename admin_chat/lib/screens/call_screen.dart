@@ -7,12 +7,14 @@ class CallScreen extends StatefulWidget {
   final bool isVideoCall;
   final bool
   isCaller; // true if this device initiated the call, false if receiving
+  final IO.Socket socket; // <--- The shared socket passed from ChatScreen
 
   const CallScreen({
     super.key,
     required this.callerName,
     required this.isVideoCall,
     required this.isCaller,
+    required this.socket,
   });
 
   @override
@@ -32,7 +34,6 @@ class _CallScreenState extends State<CallScreen> {
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
 
-  late IO.Socket _socket;
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
 
@@ -54,51 +55,44 @@ class _CallScreenState extends State<CallScreen> {
     await _remoteRenderer.initialize();
 
     await _startLocalStream();
-    _connectSignalingSocket();
+    _setupSignalingListeners();
   }
 
-  void _connectSignalingSocket() {
-    _socket = IO.io(
-      'https://vibechat-server-vo3f.onrender.com',
-      <String, dynamic>{
-        'transports': ['websocket'],
-        'autoConnect': true,
-      },
+  void _setupSignalingListeners() async {
+    print(
+      '🟢 CallScreen Active (isCaller: ${widget.isCaller}) using Shared Socket',
     );
 
-    _socket.onConnect((_) async {
-      print(
-        '🟢 Connected to Call Signaling Server (isCaller: ${widget.isCaller})',
-      );
-      await _createPeerConnection();
+    await _createPeerConnection();
 
-      if (widget.isCaller) {
-        setState(() => _callStatus = "Ringing...");
+    // Since the socket is ALREADY connected from ChatScreen,
+    // we execute the caller logic immediately.
+    if (widget.isCaller) {
+      setState(() => _callStatus = "Ringing...");
 
-        // Determine my own name based on the target callerName
-        String myName = widget.callerName == 'Admin' ? 'Client' : 'Admin';
+      // Determine my own name based on the target callerName
+      String myName = widget.callerName == 'Admin' ? 'Client' : 'Admin';
 
-        // 1. Send the ring invite to the other device
-        _socket.emit('call_invite', {
-          'callerName': myName,
-          'isVideoCall': widget.isVideoCall,
-        });
-      } else {
-        setState(() => _callStatus = "Connecting secure line...");
-      }
-    });
+      // 1. Send the ring invite to the other device
+      widget.socket.emit('call_invite', {
+        'callerName': myName,
+        'isVideoCall': widget.isVideoCall,
+      });
+    } else {
+      setState(() => _callStatus = "Connecting secure line...");
+    }
 
     // 2. The receiver accepted! NOW we generate and send the WebRTC offer.
-    _socket.on('call_ready_for_offer', (_) async {
+    widget.socket.on('call_ready_for_offer', (_) async {
       if (mounted) setState(() => _callStatus = "Establishing Secure Call...");
 
       RTCSessionDescription offer = await _peerConnection!.createOffer();
       await _peerConnection!.setLocalDescription(offer);
-      _socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
+      widget.socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
     });
 
     // 3. The receiver declined the call.
-    _socket.on('call_rejected', (_) {
+    widget.socket.on('call_rejected', (_) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -107,23 +101,24 @@ class _CallScreenState extends State<CallScreen> {
       }
     });
 
-    _socket.on('offer', (data) async {
+    // 4. Handle standard WebRTC exchanges
+    widget.socket.on('offer', (data) async {
       if (_peerConnection == null) await _createPeerConnection();
       await _peerConnection!.setRemoteDescription(
         RTCSessionDescription(data['sdp'], data['type']),
       );
       RTCSessionDescription answer = await _peerConnection!.createAnswer();
       await _peerConnection!.setLocalDescription(answer);
-      _socket.emit('answer', {'type': answer.type, 'sdp': answer.sdp});
+      widget.socket.emit('answer', {'type': answer.type, 'sdp': answer.sdp});
     });
 
-    _socket.on('answer', (data) async {
+    widget.socket.on('answer', (data) async {
       await _peerConnection?.setRemoteDescription(
         RTCSessionDescription(data['sdp'], data['type']),
       );
     });
 
-    _socket.on('ice-candidate', (data) async {
+    widget.socket.on('ice-candidate', (data) async {
       if (data != null && _peerConnection != null) {
         RTCIceCandidate candidate = RTCIceCandidate(
           data['candidate'],
@@ -134,7 +129,7 @@ class _CallScreenState extends State<CallScreen> {
       }
     });
 
-    _socket.on('end-call', (_) {
+    widget.socket.on('end-call', (_) {
       if (mounted) Navigator.pop(context);
     });
   }
@@ -179,7 +174,7 @@ class _CallScreenState extends State<CallScreen> {
 
     _peerConnection!.onIceCandidate = (candidate) {
       if (candidate != null) {
-        _socket.emit('ice-candidate', {
+        widget.socket.emit('ice-candidate', {
           'candidate': candidate.candidate,
           'sdpMid': candidate.sdpMid,
           'sdpMLineIndex': candidate.sdpMLineIndex,
@@ -190,12 +185,22 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
-    _socket.emit('end-call');
+    widget.socket.emit('end-call');
+
+    // Clean up ONLY CallScreen listeners so the ChatScreen socket stays clean
+    widget.socket.off('call_ready_for_offer');
+    widget.socket.off('call_rejected');
+    widget.socket.off('offer');
+    widget.socket.off('answer');
+    widget.socket.off('ice-candidate');
+    widget.socket.off('end-call');
+
     _localStream?.dispose();
     _peerConnection?.dispose();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
-    _socket.dispose();
+
+    // DO NOT DISPOSE THE SOCKET HERE (It belongs to ChatScreen)
     super.dispose();
   }
 

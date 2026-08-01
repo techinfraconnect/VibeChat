@@ -187,6 +187,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               callerName: caller,
                               isVideoCall: isVideo,
                               isCaller: false,
+                              socket: _socket, // <-- Pass the shared socket
                             ),
                           ),
                         );
@@ -227,6 +228,7 @@ class _ChatScreenState extends State<ChatScreen> {
           callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
           isVideoCall: false,
           isCaller: true,
+          socket: _socket, // <-- Pass the shared socket
         ),
       ),
     );
@@ -240,6 +242,7 @@ class _ChatScreenState extends State<ChatScreen> {
           callerName: widget.senderName == 'Admin' ? 'Client' : 'Admin',
           isVideoCall: true,
           isCaller: true,
+          socket: _socket, // <-- Pass the shared socket
         ),
       ),
     );

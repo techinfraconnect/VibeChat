@@ -180,6 +180,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               callerName: caller,
                               isVideoCall: isVideo,
                               isCaller: false,
+                              socket: _socket, // <-- Pass the shared socket
                             ),
                           ),
                         );
@@ -216,10 +217,11 @@ class _ChatScreenState extends State<ChatScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const CallScreen(
+        builder: (context) => CallScreen(
           callerName: 'Admin',
           isVideoCall: false,
           isCaller: true,
+          socket: _socket, // <-- Pass the shared socket
         ),
       ),
     );
@@ -229,10 +231,11 @@ class _ChatScreenState extends State<ChatScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const CallScreen(
+        builder: (context) => CallScreen(
           callerName: 'Admin',
           isVideoCall: true,
           isCaller: true,
+          socket: _socket, // <-- Pass the shared socket
         ),
       ),
     );
