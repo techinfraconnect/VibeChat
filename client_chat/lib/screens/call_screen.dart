@@ -68,7 +68,7 @@ class _CallScreenState extends State<CallScreen> {
     _initCallSession();
   }
 
-  // PRO FIX 2: iOS Native Audio Crash Prevention
+  // PRO FIX 2: Prevent iOS Native Audio Engine Crash
   Future<void> _safeAudioRouting() async {
     if (!mounted) return;
     try {
@@ -77,8 +77,9 @@ class _CallScreenState extends State<CallScreen> {
         _isSpeakerOn = shouldBeSpeaker;
       });
 
-      // iOS natively defaults to earpiece for WebRTC. Forcing this command on iOS causes a fatal C++ crash.
-      // We ONLY force it on Android.
+      // CRITICAL: iOS natively handles audio routing for WebRTC perfectly.
+      // Forcing this command programmatically on iOS causes a SIGKILL crash.
+      // We ONLY execute this on Android.
       if (Platform.isAndroid) {
         await Helper.setSpeakerphoneOn(shouldBeSpeaker);
       }
@@ -89,9 +90,8 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _initCallSession() async {
     try {
-      // PRO FIX 1: The UI Animation Delay
-      // Accessing hardware during iOS screen transition causes a fatal Metal crash.
-      // We MUST let the new screen settle for 500ms before turning on the camera.
+      // PRO FIX 3: Let the UI transition finish before hitting hardware.
+      // Accessing the camera during a route transition causes iOS Metal crashes.
       await Future.delayed(const Duration(milliseconds: 500));
 
       await _localRenderer.initialize();
@@ -239,7 +239,9 @@ class _CallScreenState extends State<CallScreen> {
     try {
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
-        'video': widget.isVideoCall,
+        'video': widget.isVideoCall
+            ? {'facingMode': _isFrontCamera ? 'user' : 'environment'}
+            : false,
       });
     } catch (e) {
       print('❌ MEDIA ERROR (Tier 1): $e');
@@ -264,7 +266,6 @@ class _CallScreenState extends State<CallScreen> {
       setState(() {
         _localRenderer.srcObject = _localStream;
       });
-      await _safeAudioRouting();
     }
   }
 
@@ -362,9 +363,9 @@ class _CallScreenState extends State<CallScreen> {
   void _toggleSpeaker() async {
     setState(() => _isSpeakerOn = !_isSpeakerOn);
     try {
-      if (Platform.isAndroid) {
-        await Helper.setSpeakerphoneOn(_isSpeakerOn);
-      }
+      // It is safe to allow manual user toggles on iOS,
+      // the crash only happens when forced automatically during boot
+      await Helper.setSpeakerphoneOn(_isSpeakerOn);
     } catch (e) {
       print("⚠️ Audio toggle warning: $e");
     }
