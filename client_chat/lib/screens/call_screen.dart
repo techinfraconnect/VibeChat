@@ -23,7 +23,7 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   bool _isMuted = false;
   bool _isVideoOff = false;
-  bool _isSpeakerOn = false; // Point 5 Fix: Default to false (Earpiece)
+  late bool _isSpeakerOn;
   bool _isFrontCamera = true;
   bool _isRemoteConnected = false;
 
@@ -38,7 +38,6 @@ class _CallScreenState extends State<CallScreen> {
   List<RTCIceCandidate> _queuedRemoteCandidates = [];
   bool _isRemoteDescriptionSet = false;
 
-  // Point 6 Fix: Floatable PIP State
   bool _pipInitialized = false;
   Offset _pipPosition = const Offset(20, 20);
 
@@ -59,30 +58,52 @@ class _CallScreenState extends State<CallScreen> {
     'sdpSemantics': 'unified-plan',
   };
 
+  final Map<String, dynamic> _offerSdpConstraints = {
+    "mandatory": {"OfferToReceiveAudio": true, "OfferToReceiveVideo": true},
+    "optional": [],
+  };
+
   String get myName => widget.callerName == 'Admin' ? 'Client' : 'Admin';
 
   @override
   void initState() {
     super.initState();
+    _isSpeakerOn = widget.isVideoCall;
     _initCallSession();
   }
 
-  // Point 5 Fix: Aggressively force audio to the earpiece
-  void _forceEarpieceRouting() {
+  // PRO FIX 2: Wrapped in async try/catch to stop iOS AVAudioSession crashes
+  Future<void> _safeAudioRouting() async {
     if (!mounted) return;
-    setState(() {
-      _isSpeakerOn = false; // Ensure UI reflects Earpiece mode
-    });
-    Helper.setSpeakerphoneOn(false);
+    try {
+      setState(() {
+        _isSpeakerOn = widget.isVideoCall;
+      });
+      await Helper.setSpeakerphoneOn(widget.isVideoCall);
+    } catch (e) {
+      print('⚠️ iOS Audio Route Warning (Ignored safely): $e');
+    }
   }
 
   Future<void> _initCallSession() async {
-    await _localRenderer.initialize();
-    await _remoteRenderer.initialize();
+    try {
+      await _localRenderer.initialize();
+      await _remoteRenderer.initialize();
 
-    // Point 1-4 Fix: We MUST wait for the camera/mic to initialize BEFORE signaling.
-    await _startLocalStream();
-    _setupSignalingListeners();
+      await _startLocalStream();
+      _setupSignalingListeners();
+    } catch (e) {
+      print('❌ FATAL INIT ERROR: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Hardware initialization failed. Please check permissions.',
+            ),
+          ),
+        );
+      }
+    }
   }
 
   void _sendSignal(String type, Map<String, dynamic> data) {
@@ -110,7 +131,6 @@ class _CallScreenState extends State<CallScreen> {
           ? Map<String, dynamic>.from(msg['data'])
           : <String, dynamic>{};
 
-      // Strict constraints to ensure two-way mapping
       final Map<String, dynamic> sdpConstraints = {
         "mandatory": {
           "OfferToReceiveAudio": true,
@@ -209,25 +229,15 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _startLocalStream() async {
     try {
-      // Tier 1: Standard Capture
+      // PRO FIX 1: Safest generic constraints to prevent iOS Dictionary Cast Crashes
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
-        'video': widget.isVideoCall
-            ? {'facingMode': _isFrontCamera ? 'user' : 'environment'}
-            : false,
+        'video': widget.isVideoCall,
       });
     } catch (e) {
-      print('❌ TIER 1 MEDIA FAILED: $e');
-      // Tier 2: Safe Fallback
+      print('❌ MEDIA ERROR (Tier 1): $e');
       if (widget.isVideoCall) {
         try {
-          _localStream = await navigator.mediaDevices.getUserMedia({
-            'audio': true,
-            'video': true,
-          });
-        } catch (fallbackError) {
-          print('❌ TIER 2 VIDEO FAILED: $fallbackError');
-          // Tier 3: Audio Only Fallback to prevent silent crash
           _localStream = await navigator.mediaDevices.getUserMedia({
             'audio': true,
             'video': false,
@@ -236,6 +246,8 @@ class _CallScreenState extends State<CallScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Camera unavailable. Audio only.')),
             );
+        } catch (fallbackError) {
+          print('❌ FALLBACK AUDIO FAILED: $fallbackError');
         }
       }
     }
@@ -244,7 +256,8 @@ class _CallScreenState extends State<CallScreen> {
       setState(() {
         _localRenderer.srcObject = _localStream;
       });
-      _forceEarpieceRouting();
+      // Route audio safely without crashing iOS
+      await _safeAudioRouting();
     }
   }
 
@@ -252,7 +265,6 @@ class _CallScreenState extends State<CallScreen> {
     _peerConnection = await createPeerConnection(_peerConnectionConfig);
 
     if (_localStream != null) {
-      // Point 1-4 Fix: addStream guarantees Audio and Video tracks are bundled together
       await _peerConnection!.addStream(_localStream!);
     }
 
@@ -263,7 +275,7 @@ class _CallScreenState extends State<CallScreen> {
             _isRemoteConnected = true;
             _callStatus = "Connected Live";
           });
-        _forceEarpieceRouting();
+        _safeAudioRouting();
       }
     };
 
@@ -278,7 +290,6 @@ class _CallScreenState extends State<CallScreen> {
       }
     };
 
-    // Listen to the bundled streams directly
     _peerConnection!.onAddStream = (stream) {
       if (mounted) {
         setState(() {
@@ -286,7 +297,7 @@ class _CallScreenState extends State<CallScreen> {
           _isRemoteConnected = true;
           _callStatus = "Connected Live";
         });
-        _forceEarpieceRouting();
+        _safeAudioRouting();
       }
     };
 
@@ -297,7 +308,6 @@ class _CallScreenState extends State<CallScreen> {
           _isRemoteConnected = true;
           _callStatus = "Connected Live";
         });
-        _forceEarpieceRouting();
       }
     };
 
@@ -341,30 +351,39 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
-  void _toggleSpeaker() {
+  void _toggleSpeaker() async {
     setState(() => _isSpeakerOn = !_isSpeakerOn);
-    Helper.setSpeakerphoneOn(_isSpeakerOn);
+    try {
+      await Helper.setSpeakerphoneOn(_isSpeakerOn);
+    } catch (e) {
+      print("⚠️ iOS Speakerphone toggle warning: $e");
+    }
   }
 
   Future<void> _toggleCameraDirection() async {
     if (_localStream != null && widget.isVideoCall) {
       final videoTracks = _localStream!.getVideoTracks();
       if (videoTracks.isNotEmpty) {
-        await Helper.switchCamera(videoTracks.first);
-        setState(() => _isFrontCamera = !_isFrontCamera);
+        try {
+          await Helper.switchCamera(videoTracks.first);
+          setState(() => _isFrontCamera = !_isFrontCamera);
+        } catch (e) {
+          print("⚠️ Camera switch warning: $e");
+        }
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Initialize PIP in top right corner safely
     if (!_pipInitialized) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        setState(() {
-          _pipPosition = Offset(MediaQuery.of(context).size.width - 120, 20);
-          _pipInitialized = true;
-        });
+        if (mounted) {
+          setState(() {
+            _pipPosition = Offset(MediaQuery.of(context).size.width - 120, 20);
+            _pipInitialized = true;
+          });
+        }
       });
     }
 
@@ -376,7 +395,6 @@ class _CallScreenState extends State<CallScreen> {
             widget.isVideoCall && _isRemoteConnected
                 ? Stack(
                     children: [
-                      // Remote Video (Full Screen)
                       Positioned.fill(
                         child: RTCVideoView(
                           _remoteRenderer,
@@ -386,7 +404,6 @@ class _CallScreenState extends State<CallScreen> {
                         ),
                       ),
 
-                      // Point 6 Fix: MS Teams Style Floatable PIP
                       if (_pipInitialized)
                         Positioned(
                           left: _pipPosition.dx,
@@ -401,7 +418,6 @@ class _CallScreenState extends State<CallScreen> {
                                   context,
                                 ).size.height;
 
-                                // Boundary clamping to prevent PIP from getting lost off-screen
                                 double newX =
                                     (_pipPosition.dx + details.delta.dx).clamp(
                                       0.0,
@@ -411,7 +427,7 @@ class _CallScreenState extends State<CallScreen> {
                                     (_pipPosition.dy + details.delta.dy).clamp(
                                       0.0,
                                       screenHeight - 300.0,
-                                    ); // Leaves room for buttons
+                                    );
 
                                 _pipPosition = Offset(newX, newY);
                               });
@@ -446,7 +462,6 @@ class _CallScreenState extends State<CallScreen> {
                           ),
                         ),
 
-                      // Camera Flip Button
                       Positioned(
                         top: 20,
                         left: 20,
