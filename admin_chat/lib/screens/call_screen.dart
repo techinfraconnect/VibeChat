@@ -35,9 +35,7 @@ class _CallScreenState extends State<CallScreen> {
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
 
-  // ---------------------------------------------------------
-  // THE PRO FIX: ICE Candidate Queue State Variables
-  // ---------------------------------------------------------
+  // ICE Candidate Queue State Variables
   List<RTCIceCandidate> _queuedRemoteCandidates = [];
   bool _isRemoteDescriptionSet = false;
 
@@ -83,7 +81,7 @@ class _CallScreenState extends State<CallScreen> {
       if (msg['sender'] != 'SYSTEM_SIGNAL') return;
       if (msg['fromDevice'] == myName) return;
 
-      final type = msg['signalType'];
+      final String type = msg['signalType']?.toString() ?? '';
       final Map<String, dynamic> data = msg['data'] != null
           ? Map<String, dynamic>.from(msg['data'])
           : <String, dynamic>{};
@@ -101,11 +99,13 @@ class _CallScreenState extends State<CallScreen> {
         Navigator.pop(context);
       } else if (type == 'offer' && !widget.isCaller) {
         if (_peerConnection == null) await _createPeerConnection();
+
+        String sdp = data['sdp']?.toString() ?? '';
+        String sdpType = data['type']?.toString() ?? '';
         await _peerConnection!.setRemoteDescription(
-          RTCSessionDescription(data['sdp'], data['type']),
+          RTCSessionDescription(sdp, sdpType),
         );
 
-        // Mark remote as set and flush any early ICE candidates!
         _isRemoteDescriptionSet = true;
         _processQueuedCandidates();
 
@@ -113,44 +113,45 @@ class _CallScreenState extends State<CallScreen> {
         await _peerConnection!.setLocalDescription(answer);
         _sendSignal('answer', {'type': answer.type, 'sdp': answer.sdp});
       } else if (type == 'answer' && widget.isCaller) {
+        String sdp = data['sdp']?.toString() ?? '';
+        String sdpType = data['type']?.toString() ?? '';
         await _peerConnection?.setRemoteDescription(
-          RTCSessionDescription(data['sdp'], data['type']),
+          RTCSessionDescription(sdp, sdpType),
         );
 
-        // Mark remote as set and flush any early ICE candidates!
         _isRemoteDescriptionSet = true;
         _processQueuedCandidates();
       } else if (type == 'ice-candidate') {
+        // PRO FIX: Strict type casting prevents fatal silent background crashes!
+        String? candidateStr = data['candidate']?.toString();
+        String? sdpMid = data['sdpMid']?.toString();
+        int? sdpMLineIndex = data['sdpMLineIndex'] != null
+            ? int.tryParse(data['sdpMLineIndex'].toString())
+            : null;
+
         RTCIceCandidate candidate = RTCIceCandidate(
-          data['candidate'],
-          data['sdpMid'],
-          data['sdpMLineIndex'],
+          candidateStr,
+          sdpMid,
+          sdpMLineIndex,
         );
 
-        // THE PRO FIX: Queue ICE candidates if the Remote Description isn't registered yet!
         if (_isRemoteDescriptionSet && _peerConnection != null) {
           await _peerConnection!.addCandidate(candidate);
         } else {
           _queuedRemoteCandidates.add(candidate);
-          print('📦 Queued an early ICE candidate');
         }
       } else if (type == 'end-call') {
         if (mounted) Navigator.pop(context);
       }
-    } catch (e) {
-      print('Signal Parse Error: $e');
+    } catch (e, stacktrace) {
+      print('❌ SIGNAL PARSE ERROR: $e');
+      print(stacktrace);
     }
   }
 
-  // Flushes the ICE Candidate Queue
   void _processQueuedCandidates() async {
     for (var candidate in _queuedRemoteCandidates) {
       await _peerConnection?.addCandidate(candidate);
-    }
-    if (_queuedRemoteCandidates.isNotEmpty) {
-      print(
-        '✅ Successfully processed ${_queuedRemoteCandidates.length} queued ICE candidates',
-      );
     }
     _queuedRemoteCandidates.clear();
   }
@@ -188,6 +189,10 @@ class _CallScreenState extends State<CallScreen> {
         mediaConstraints,
       );
       _localRenderer.srcObject = _localStream;
+
+      // Ensure audio routes correctly
+      Helper.setSpeakerphoneOn(_isSpeakerOn);
+
       setState(() {});
     } catch (e) {
       print('Error accessing media devices: $e');
@@ -203,12 +208,31 @@ class _CallScreenState extends State<CallScreen> {
       });
     }
 
+    // PRO FIX: Bulletproof Fallback UI updaters
     _peerConnection!.onConnectionState = (state) {
-      print('📡 WebRTC Connection State: $state');
+      print('📡 WebRTC State: $state');
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        if (mounted)
+          setState(() {
+            _isRemoteConnected = true;
+            _callStatus = "Connected Live";
+          });
+      }
     };
 
-    // Standard video/audio track handler
+    _peerConnection!.onIceConnectionState = (state) {
+      print('🧊 ICE State: $state');
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
+        if (mounted)
+          setState(() {
+            _isRemoteConnected = true;
+            _callStatus = "Connected Live";
+          });
+      }
+    };
+
     _peerConnection!.onTrack = (event) {
+      print('📺 Track Received: ${event.track.kind}');
       if (event.streams.isNotEmpty) {
         if (mounted) {
           setState(() {
@@ -220,7 +244,6 @@ class _CallScreenState extends State<CallScreen> {
       }
     };
 
-    // PRO FIX FALLBACK: Handles older WebRTC plugins and strict Audio-Only routing
     _peerConnection!.onAddStream = (stream) {
       if (mounted) {
         setState(() {
