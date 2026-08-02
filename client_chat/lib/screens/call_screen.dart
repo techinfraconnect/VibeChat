@@ -23,7 +23,7 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   bool _isMuted = false;
   bool _isVideoOff = false;
-  late bool _isSpeakerOn;
+  bool _isSpeakerOn = false; // Point 5 Fix: Default to false (Earpiece)
   bool _isFrontCamera = true;
   bool _isRemoteConnected = false;
 
@@ -38,9 +38,9 @@ class _CallScreenState extends State<CallScreen> {
   List<RTCIceCandidate> _queuedRemoteCandidates = [];
   bool _isRemoteDescriptionSet = false;
 
-  bool _pipSet = false;
-  double _pipX = 0;
-  double _pipY = 0;
+  // Point 6 Fix: Floatable PIP State
+  bool _pipInitialized = false;
+  Offset _pipPosition = const Offset(20, 20);
 
   final Map<String, dynamic> _peerConnectionConfig = {
     'iceServers': [
@@ -59,23 +59,28 @@ class _CallScreenState extends State<CallScreen> {
     'sdpSemantics': 'unified-plan',
   };
 
-  final Map<String, dynamic> _offerSdpConstraints = {
-    "mandatory": {"OfferToReceiveAudio": true, "OfferToReceiveVideo": true},
-    "optional": [],
-  };
-
   String get myName => widget.callerName == 'Admin' ? 'Client' : 'Admin';
 
   @override
   void initState() {
     super.initState();
-    _isSpeakerOn = widget.isVideoCall;
     _initCallSession();
+  }
+
+  // Point 5 Fix: Aggressively force audio to the earpiece
+  void _forceEarpieceRouting() {
+    if (!mounted) return;
+    setState(() {
+      _isSpeakerOn = false; // Ensure UI reflects Earpiece mode
+    });
+    Helper.setSpeakerphoneOn(false);
   }
 
   Future<void> _initCallSession() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
+
+    // Point 1-4 Fix: We MUST wait for the camera/mic to initialize BEFORE signaling.
     await _startLocalStream();
     _setupSignalingListeners();
   }
@@ -105,11 +110,20 @@ class _CallScreenState extends State<CallScreen> {
           ? Map<String, dynamic>.from(msg['data'])
           : <String, dynamic>{};
 
+      // Strict constraints to ensure two-way mapping
+      final Map<String, dynamic> sdpConstraints = {
+        "mandatory": {
+          "OfferToReceiveAudio": true,
+          "OfferToReceiveVideo": widget.isVideoCall,
+        },
+        "optional": [],
+      };
+
       if (type == 'call_accepted' && widget.isCaller) {
         if (mounted)
           setState(() => _callStatus = "Establishing Secure Call...");
         RTCSessionDescription offer = await _peerConnection!.createOffer(
-          _offerSdpConstraints,
+          sdpConstraints,
         );
         await _peerConnection!.setLocalDescription(offer);
         _sendSignal('offer', {'type': offer.type, 'sdp': offer.sdp});
@@ -131,7 +145,7 @@ class _CallScreenState extends State<CallScreen> {
         _processQueuedCandidates();
 
         RTCSessionDescription answer = await _peerConnection!.createAnswer(
-          _offerSdpConstraints,
+          sdpConstraints,
         );
         await _peerConnection!.setLocalDescription(answer);
         _sendSignal('answer', {'type': answer.type, 'sdp': answer.sdp});
@@ -194,35 +208,43 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _startLocalStream() async {
-    final Map<String, dynamic> mediaConstraints = {
-      'audio': true,
-      'video': widget.isVideoCall ? true : false,
-    };
-
     try {
-      _localStream = await navigator.mediaDevices.getUserMedia(
-        mediaConstraints,
-      );
-      if (mounted) {
-        setState(() {
-          _localRenderer.srcObject = _localStream;
-        });
-      }
-      Helper.setSpeakerphoneOn(_isSpeakerOn);
+      // Tier 1: Standard Capture
+      _localStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': widget.isVideoCall
+            ? {'facingMode': _isFrontCamera ? 'user' : 'environment'}
+            : false,
+      });
     } catch (e) {
-      print('❌ ERROR GRABBING MEDIA: $e');
+      print('❌ TIER 1 MEDIA FAILED: $e');
+      // Tier 2: Safe Fallback
       if (widget.isVideoCall) {
         try {
           _localStream = await navigator.mediaDevices.getUserMedia({
             'audio': true,
+            'video': true,
+          });
+        } catch (fallbackError) {
+          print('❌ TIER 2 VIDEO FAILED: $fallbackError');
+          // Tier 3: Audio Only Fallback to prevent silent crash
+          _localStream = await navigator.mediaDevices.getUserMedia({
+            'audio': true,
             'video': false,
           });
-          if (mounted) setState(() => _localRenderer.srcObject = _localStream);
-          Helper.setSpeakerphoneOn(_isSpeakerOn);
-        } catch (fallbackError) {
-          print('❌ FALLBACK AUDIO ALSO FAILED: $fallbackError');
+          if (mounted)
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Camera unavailable. Audio only.')),
+            );
         }
       }
+    }
+
+    if (_localStream != null && mounted) {
+      setState(() {
+        _localRenderer.srcObject = _localStream;
+      });
+      _forceEarpieceRouting();
     }
   }
 
@@ -230,9 +252,8 @@ class _CallScreenState extends State<CallScreen> {
     _peerConnection = await createPeerConnection(_peerConnectionConfig);
 
     if (_localStream != null) {
-      for (var track in _localStream!.getTracks()) {
-        await _peerConnection!.addTrack(track, _localStream!);
-      }
+      // Point 1-4 Fix: addStream guarantees Audio and Video tracks are bundled together
+      await _peerConnection!.addStream(_localStream!);
     }
 
     _peerConnection!.onConnectionState = (state) {
@@ -242,6 +263,7 @@ class _CallScreenState extends State<CallScreen> {
             _isRemoteConnected = true;
             _callStatus = "Connected Live";
           });
+        _forceEarpieceRouting();
       }
     };
 
@@ -256,18 +278,7 @@ class _CallScreenState extends State<CallScreen> {
       }
     };
 
-    _peerConnection!.onTrack = (event) {
-      if (event.streams.isNotEmpty) {
-        if (mounted) {
-          setState(() {
-            _remoteRenderer.srcObject = event.streams[0];
-            _isRemoteConnected = true;
-            _callStatus = "Connected Live";
-          });
-        }
-      }
-    };
-
+    // Listen to the bundled streams directly
     _peerConnection!.onAddStream = (stream) {
       if (mounted) {
         setState(() {
@@ -275,6 +286,18 @@ class _CallScreenState extends State<CallScreen> {
           _isRemoteConnected = true;
           _callStatus = "Connected Live";
         });
+        _forceEarpieceRouting();
+      }
+    };
+
+    _peerConnection!.onTrack = (event) {
+      if (event.streams.isNotEmpty && mounted) {
+        setState(() {
+          _remoteRenderer.srcObject = event.streams[0];
+          _isRemoteConnected = true;
+          _callStatus = "Connected Live";
+        });
+        _forceEarpieceRouting();
       }
     };
 
@@ -301,9 +324,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _toggleMic() {
-    setState(() {
-      _isMuted = !_isMuted;
-    });
+    setState(() => _isMuted = !_isMuted);
     if (_localStream != null) {
       for (var track in _localStream!.getAudioTracks()) {
         track.enabled = !_isMuted;
@@ -312,9 +333,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _toggleVideo() {
-    setState(() {
-      _isVideoOff = !_isVideoOff;
-    });
+    setState(() => _isVideoOff = !_isVideoOff);
     if (_localStream != null) {
       for (var track in _localStream!.getVideoTracks()) {
         track.enabled = !_isVideoOff;
@@ -323,9 +342,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _toggleSpeaker() {
-    setState(() {
-      _isSpeakerOn = !_isSpeakerOn;
-    });
+    setState(() => _isSpeakerOn = !_isSpeakerOn);
     Helper.setSpeakerphoneOn(_isSpeakerOn);
   }
 
@@ -334,19 +351,21 @@ class _CallScreenState extends State<CallScreen> {
       final videoTracks = _localStream!.getVideoTracks();
       if (videoTracks.isNotEmpty) {
         await Helper.switchCamera(videoTracks.first);
-        setState(() {
-          _isFrontCamera = !_isFrontCamera;
-        });
+        setState(() => _isFrontCamera = !_isFrontCamera);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_pipSet) {
-      _pipX = MediaQuery.of(context).size.width - 120;
-      _pipY = 20;
-      _pipSet = true;
+    // Initialize PIP in top right corner safely
+    if (!_pipInitialized) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        setState(() {
+          _pipPosition = Offset(MediaQuery.of(context).size.width - 120, 20);
+          _pipInitialized = true;
+        });
+      });
     }
 
     return Scaffold(
@@ -357,45 +376,77 @@ class _CallScreenState extends State<CallScreen> {
             widget.isVideoCall && _isRemoteConnected
                 ? Stack(
                     children: [
+                      // Remote Video (Full Screen)
                       Positioned.fill(
-                        child: RTCVideoView(_remoteRenderer, mirror: false),
-                      ),
-
-                      Positioned(
-                        left: _pipX,
-                        top: _pipY,
-                        child: GestureDetector(
-                          onPanUpdate: (details) {
-                            setState(() {
-                              _pipX += details.delta.dx;
-                              _pipY += details.delta.dy;
-                            });
-                          },
-                          child: Container(
-                            width: 100,
-                            height: 150,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: Colors.white24,
-                                width: 2,
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black54,
-                                  blurRadius: 10,
-                                  spreadRadius: 1,
-                                ),
-                              ],
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: RTCVideoView(_localRenderer, mirror: true),
-                            ),
-                          ),
+                        child: RTCVideoView(
+                          _remoteRenderer,
+                          mirror: false,
+                          objectFit:
+                              RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                         ),
                       ),
 
+                      // Point 6 Fix: MS Teams Style Floatable PIP
+                      if (_pipInitialized)
+                        Positioned(
+                          left: _pipPosition.dx,
+                          top: _pipPosition.dy,
+                          child: GestureDetector(
+                            onPanUpdate: (details) {
+                              setState(() {
+                                double screenWidth = MediaQuery.of(
+                                  context,
+                                ).size.width;
+                                double screenHeight = MediaQuery.of(
+                                  context,
+                                ).size.height;
+
+                                // Boundary clamping to prevent PIP from getting lost off-screen
+                                double newX =
+                                    (_pipPosition.dx + details.delta.dx).clamp(
+                                      0.0,
+                                      screenWidth - 100.0,
+                                    );
+                                double newY =
+                                    (_pipPosition.dy + details.delta.dy).clamp(
+                                      0.0,
+                                      screenHeight - 300.0,
+                                    ); // Leaves room for buttons
+
+                                _pipPosition = Offset(newX, newY);
+                              });
+                            },
+                            child: Container(
+                              width: 100,
+                              height: 150,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.white24,
+                                  width: 2,
+                                ),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black54,
+                                    blurRadius: 10,
+                                    spreadRadius: 1,
+                                  ),
+                                ],
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: RTCVideoView(
+                                  _localRenderer,
+                                  mirror: true,
+                                  objectFit: RTCVideoViewObjectFit
+                                      .RTCVideoViewObjectFitCover,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+
+                      // Camera Flip Button
                       Positioned(
                         top: 20,
                         left: 20,
