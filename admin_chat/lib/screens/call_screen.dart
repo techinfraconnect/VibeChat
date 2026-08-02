@@ -58,11 +58,6 @@ class _CallScreenState extends State<CallScreen> {
     'sdpSemantics': 'unified-plan',
   };
 
-  final Map<String, dynamic> _offerSdpConstraints = {
-    "mandatory": {"OfferToReceiveAudio": true, "OfferToReceiveVideo": true},
-    "optional": [],
-  };
-
   String get myName => widget.callerName == 'Admin' ? 'Client' : 'Admin';
 
   @override
@@ -72,14 +67,16 @@ class _CallScreenState extends State<CallScreen> {
     _initCallSession();
   }
 
-  // PRO FIX 2: Wrapped in async try/catch to stop iOS AVAudioSession crashes
+  // Safely sets audio routing ONLY after connection is established
   Future<void> _safeAudioRouting() async {
     if (!mounted) return;
     try {
+      // Point 5 Fix: Ensure default audio routes appropriately
+      bool shouldBeSpeaker = widget.isVideoCall;
       setState(() {
-        _isSpeakerOn = widget.isVideoCall;
+        _isSpeakerOn = shouldBeSpeaker;
       });
-      await Helper.setSpeakerphoneOn(widget.isVideoCall);
+      await Helper.setSpeakerphoneOn(shouldBeSpeaker);
     } catch (e) {
       print('⚠️ iOS Audio Route Warning (Ignored safely): $e');
     }
@@ -131,6 +128,7 @@ class _CallScreenState extends State<CallScreen> {
           ? Map<String, dynamic>.from(msg['data'])
           : <String, dynamic>{};
 
+      // Point 1-4 Fix: Force two-way media constraints
       final Map<String, dynamic> sdpConstraints = {
         "mandatory": {
           "OfferToReceiveAudio": true,
@@ -140,8 +138,9 @@ class _CallScreenState extends State<CallScreen> {
       };
 
       if (type == 'call_accepted' && widget.isCaller) {
-        if (mounted)
+        if (mounted) {
           setState(() => _callStatus = "Establishing Secure Call...");
+        }
         RTCSessionDescription offer = await _peerConnection!.createOffer(
           sdpConstraints,
         );
@@ -229,10 +228,11 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _startLocalStream() async {
     try {
-      // PRO FIX 1: Safest generic constraints to prevent iOS Dictionary Cast Crashes
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
-        'video': widget.isVideoCall,
+        'video': widget.isVideoCall
+            ? {'facingMode': _isFrontCamera ? 'user' : 'environment'}
+            : false,
       });
     } catch (e) {
       print('❌ MEDIA ERROR (Tier 1): $e');
@@ -242,10 +242,11 @@ class _CallScreenState extends State<CallScreen> {
             'audio': true,
             'video': false,
           });
-          if (mounted)
+          if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Camera unavailable. Audio only.')),
             );
+          }
         } catch (fallbackError) {
           print('❌ FALLBACK AUDIO FAILED: $fallbackError');
         }
@@ -256,8 +257,8 @@ class _CallScreenState extends State<CallScreen> {
       setState(() {
         _localRenderer.srcObject = _localStream;
       });
-      // Route audio safely without crashing iOS
-      await _safeAudioRouting();
+      // CRITICAL iOS FIX: Removed early audio routing here.
+      // It is now safely delayed until the WebRTC connection is established.
     }
   }
 
@@ -265,16 +266,19 @@ class _CallScreenState extends State<CallScreen> {
     _peerConnection = await createPeerConnection(_peerConnectionConfig);
 
     if (_localStream != null) {
+      // Point 1-4 Fix: addStream ensures Audio/Video are bundled properly
       await _peerConnection!.addStream(_localStream!);
     }
 
     _peerConnection!.onConnectionState = (state) {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-        if (mounted)
+        if (mounted) {
           setState(() {
             _isRemoteConnected = true;
             _callStatus = "Connected Live";
           });
+        }
+        // Safely route audio now that iOS is ready
         _safeAudioRouting();
       }
     };
@@ -282,11 +286,12 @@ class _CallScreenState extends State<CallScreen> {
     _peerConnection!.onIceConnectionState = (state) {
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
-        if (mounted)
+        if (mounted) {
           setState(() {
             _isRemoteConnected = true;
             _callStatus = "Connected Live";
           });
+        }
       }
     };
 
@@ -297,7 +302,6 @@ class _CallScreenState extends State<CallScreen> {
           _isRemoteConnected = true;
           _callStatus = "Connected Live";
         });
-        _safeAudioRouting();
       }
     };
 
@@ -404,6 +408,7 @@ class _CallScreenState extends State<CallScreen> {
                         ),
                       ),
 
+                      // Point 6 Fix: Bounded, Floatable PIP
                       if (_pipInitialized)
                         Positioned(
                           left: _pipPosition.dx,
