@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -79,7 +78,6 @@ class _ChatScreenState extends State<ChatScreen> {
             _showIncomingCallDialog(data);
           } else if (type == 'end-call') {
             if (_isCallDialogOpen && mounted) {
-              FlutterRingtonePlayer.stop();
               Navigator.pop(context);
             }
           }
@@ -113,9 +111,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final bool isVideo = data['isVideoCall'] ?? false;
 
     _isCallDialogOpen = true;
-
-    // Play native ringtone
-    FlutterRingtonePlayer.playRingtone(looping: true);
 
     showDialog(
       context: context,
@@ -179,7 +174,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'decline_btn',
                       backgroundColor: const Color(0xFFD32F2F),
                       onPressed: () {
-                        FlutterRingtonePlayer.stop();
                         _socket.emit('send_message', {
                           'sender': 'SYSTEM_SIGNAL',
                           'fromDevice': senderName,
@@ -198,7 +192,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'accept_btn',
                       backgroundColor: const Color(0xFF38ef7d),
                       onPressed: () {
-                        FlutterRingtonePlayer.stop();
                         Navigator.pop(context);
                         Navigator.push(
                           context,
