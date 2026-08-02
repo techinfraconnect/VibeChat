@@ -5,9 +5,8 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 class CallScreen extends StatefulWidget {
   final String callerName;
   final bool isVideoCall;
-  final bool
-  isCaller; // true if this device initiated the call, false if receiving
-  final IO.Socket socket; // <--- The shared socket passed from ChatScreen
+  final bool isCaller;
+  final IO.Socket socket;
 
   const CallScreen({
     super.key,
@@ -43,6 +42,9 @@ class _CallScreenState extends State<CallScreen> {
     ],
   };
 
+  // Helper to determine the device's own name
+  String get myName => widget.callerName == 'Admin' ? 'Client' : 'Admin';
+
   @override
   void initState() {
     super.initState();
@@ -52,88 +54,102 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _initCallSession() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
-
-    // 1. First, wait for hardware (Camera/Mic) to fully initialize
     await _startLocalStream();
-
-    // 2. Only THEN do we setup the WebRTC listeners and accept the call
     _setupSignalingListeners();
   }
 
-  // Named listeners to prevent deleting ChatScreen's background listeners on dispose
-  void _onCallReadyForOffer(dynamic data) async {
-    if (mounted) setState(() => _callStatus = "Establishing Secure Call...");
-    RTCSessionDescription offer = await _peerConnection!.createOffer();
-    await _peerConnection!.setLocalDescription(offer);
-    widget.socket.emit('offer', {'type': offer.type, 'sdp': offer.sdp});
+  // ---------------------------------------------------------
+  // PIGGYBACK PROTOCOL EMITTER
+  // ---------------------------------------------------------
+  void _sendSignal(String type, Map<String, dynamic> data) {
+    widget.socket.emit('send_message', {
+      'sender': 'SYSTEM_SIGNAL',
+      'fromDevice': myName,
+      'signalType': type,
+      'data': data,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
   }
 
-  void _onCallRejected(dynamic data) {
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Call was declined')));
-      Navigator.pop(context);
-    }
-  }
-
-  void _onOffer(dynamic data) async {
-    if (_peerConnection == null) await _createPeerConnection();
-    await _peerConnection!.setRemoteDescription(
-      RTCSessionDescription(data['sdp'], data['type']),
-    );
-    RTCSessionDescription answer = await _peerConnection!.createAnswer();
-    await _peerConnection!.setLocalDescription(answer);
-    widget.socket.emit('answer', {'type': answer.type, 'sdp': answer.sdp});
-  }
-
-  void _onAnswer(dynamic data) async {
-    await _peerConnection?.setRemoteDescription(
-      RTCSessionDescription(data['sdp'], data['type']),
-    );
-  }
-
-  void _onIceCandidate(dynamic data) async {
-    if (data != null && _peerConnection != null) {
-      RTCIceCandidate candidate = RTCIceCandidate(
-        data['candidate'],
-        data['sdpMid'],
-        data['sdpMLineIndex'],
+  // ---------------------------------------------------------
+  // PIGGYBACK PROTOCOL RECEIVER
+  // ---------------------------------------------------------
+  void _onSignalReceived(dynamic payload) async {
+    if (!mounted) return;
+    try {
+      final msg = Map<String, dynamic>.from(
+        payload is List ? payload.first : payload,
       );
-      await _peerConnection!.addCandidate(candidate);
-    }
-  }
 
-  void _onEndCall(dynamic data) {
-    if (mounted) Navigator.pop(context);
+      // We only care about SYSTEM_SIGNAL
+      if (msg['sender'] != 'SYSTEM_SIGNAL') return;
+      // We ignore echoes of our own signals
+      if (msg['fromDevice'] == myName) return;
+
+      final type = msg['signalType'];
+      final data = msg['data'] != null
+          ? Map<String, dynamic>.from(msg['data'])
+          : {};
+
+      if (type == 'call_accepted' && widget.isCaller) {
+        if (mounted)
+          setState(() => _callStatus = "Establishing Secure Call...");
+        RTCSessionDescription offer = await _peerConnection!.createOffer();
+        await _peerConnection!.setLocalDescription(offer);
+        _sendSignal('offer', {'type': offer.type, 'sdp': offer.sdp});
+      } else if (type == 'call_rejected') {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Call was declined')));
+        Navigator.pop(context);
+      } else if (type == 'offer' && !widget.isCaller) {
+        if (_peerConnection == null) await _createPeerConnection();
+        await _peerConnection!.setRemoteDescription(
+          RTCSessionDescription(data['sdp'], data['type']),
+        );
+        RTCSessionDescription answer = await _peerConnection!.createAnswer();
+        await _peerConnection!.setLocalDescription(answer);
+        _sendSignal('answer', {'type': answer.type, 'sdp': answer.sdp});
+      } else if (type == 'answer' && widget.isCaller) {
+        await _peerConnection?.setRemoteDescription(
+          RTCSessionDescription(data['sdp'], data['type']),
+        );
+      } else if (type == 'ice-candidate') {
+        if (_peerConnection != null) {
+          RTCIceCandidate candidate = RTCIceCandidate(
+            data['candidate'],
+            data['sdpMid'],
+            data['sdpMLineIndex'],
+          );
+          await _peerConnection!.addCandidate(candidate);
+        }
+      } else if (type == 'end-call') {
+        if (mounted) Navigator.pop(context);
+      }
+    } catch (e) {
+      print('Signal Parse Error: $e');
+    }
   }
 
   void _setupSignalingListeners() async {
     print(
-      '🟢 CallScreen Active (isCaller: ${widget.isCaller}) using Shared Socket',
+      '🟢 CallScreen Active (isCaller: ${widget.isCaller}) using Shared Socket via Piggyback',
     );
     await _createPeerConnection();
 
-    // Safely attach listeners
-    widget.socket.on('call_ready_for_offer', _onCallReadyForOffer);
-    widget.socket.on('call_rejected', _onCallRejected);
-    widget.socket.on('offer', _onOffer);
-    widget.socket.on('answer', _onAnswer);
-    widget.socket.on('ice-candidate', _onIceCandidate);
-    widget.socket.on('end-call', _onEndCall);
+    // Attach listener for all incoming signals
+    widget.socket.on('receive_message', _onSignalReceived);
 
     if (widget.isCaller) {
       setState(() => _callStatus = "Ringing...");
-      String myName = widget.callerName == 'Admin' ? 'Client' : 'Admin';
-      widget.socket.emit('call_invite', {
+      _sendSignal('call_invite', {
         'callerName': myName,
         'isVideoCall': widget.isVideoCall,
       });
     } else {
       setState(() => _callStatus = "Connecting secure line...");
-      // THE PRO FIX: The receiver emits 'call_accepted' ONLY after the camera
-      // and WebRTC listeners are 100% active and listening. This stops the race condition!
-      widget.socket.emit('call_accepted');
+      // Receiver tells Caller "I am ready"
+      _sendSignal('call_accepted', {});
     }
   }
 
@@ -177,7 +193,7 @@ class _CallScreenState extends State<CallScreen> {
 
     _peerConnection!.onIceCandidate = (candidate) {
       if (candidate != null) {
-        widget.socket.emit('ice-candidate', {
+        _sendSignal('ice-candidate', {
           'candidate': candidate.candidate,
           'sdpMid': candidate.sdpMid,
           'sdpMLineIndex': candidate.sdpMLineIndex,
@@ -188,16 +204,10 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
-    widget.socket.emit('end-call');
+    _sendSignal('end-call', {});
 
-    // Clean up ONLY CallScreen specific listeners using exact function names!
-    // This protects ChatScreen's listeners from being wiped out.
-    widget.socket.off('call_ready_for_offer', _onCallReadyForOffer);
-    widget.socket.off('call_rejected', _onCallRejected);
-    widget.socket.off('offer', _onOffer);
-    widget.socket.off('answer', _onAnswer);
-    widget.socket.off('ice-candidate', _onIceCandidate);
-    widget.socket.off('end-call', _onEndCall);
+    // Specifically unbind the Piggyback listener so it doesn't leak
+    widget.socket.off('receive_message', _onSignalReceived);
 
     _localStream?.dispose();
     _peerConnection?.dispose();

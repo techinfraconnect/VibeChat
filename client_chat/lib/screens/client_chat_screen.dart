@@ -54,49 +54,55 @@ class _ChatScreenState extends State<ChatScreen> {
       },
     );
 
-    // FIX: Add all listeners BEFORE calling _socket.connect()
     _socket.onConnect((_) {
       print('🟢 Connected to server');
     });
 
-    _socket.on('receive_message', (data) {
-      final incomingMessage = Map<String, dynamic>.from(data);
-      setState(() {
-        bool exists = _messages.any(
-          (m) =>
-              m['timestamp'] == incomingMessage['timestamp'] &&
-              m['text'] == incomingMessage['text'] &&
-              m['sender'] == incomingMessage['sender'],
+    // ---------------------------------------------------------
+    // THE PIGGYBACK PROTOCOL: Listen to all incoming messages
+    // ---------------------------------------------------------
+    _socket.on('receive_message', (payload) {
+      try {
+        final incomingMessage = Map<String, dynamic>.from(
+          payload is List ? payload.first : payload,
         );
 
-        if (!exists) {
-          _messages.insert(0, incomingMessage);
-          _saveMessages();
+        // 1. INTERCEPT SYSTEM SIGNALS (Hide them from chat)
+        if (incomingMessage['sender'] == 'SYSTEM_SIGNAL') {
+          // Ignore signals sent by myself (io.emit echoes back to sender)
+          if (incomingMessage['fromDevice'] == senderName) return;
+
+          String type = incomingMessage['signalType'] ?? '';
+          if (type == 'call_invite') {
+            if (!mounted || _isCallDialogOpen) return;
+            var data = incomingMessage['data'] != null
+                ? Map<String, dynamic>.from(incomingMessage['data'])
+                : {};
+            _showIncomingCallDialog(data);
+          } else if (type == 'end-call') {
+            if (_isCallDialogOpen && mounted) {
+              Navigator.pop(context); // Dismiss the ghost dialog
+            }
+          }
+          return; // Stop processing so it doesn't show in the chat UI
         }
-      });
-    });
 
-    _socket.on('incoming_call', (data) {
-      print('🔔 Raw incoming call data received');
-      if (!mounted || _isCallDialogOpen) return;
+        // 2. NORMAL CHAT MESSAGES
+        setState(() {
+          bool exists = _messages.any(
+            (m) =>
+                m['timestamp'] == incomingMessage['timestamp'] &&
+                m['text'] == incomingMessage['text'] &&
+                m['sender'] == incomingMessage['sender'],
+          );
 
-      try {
-        final Map<String, dynamic> callData;
-        if (data is List && data.isNotEmpty) {
-          callData = Map<String, dynamic>.from(data[0]);
-        } else {
-          callData = Map<String, dynamic>.from(data);
-        }
-
-        _showIncomingCallDialog(callData);
+          if (!exists) {
+            _messages.insert(0, incomingMessage);
+            _saveMessages();
+          }
+        });
       } catch (e) {
-        print('❌ Error parsing incoming call payload: $e');
-      }
-    });
-
-    _socket.on('end-call', (_) {
-      if (_isCallDialogOpen && mounted) {
-        Navigator.pop(context); // Dismiss the ghost dialog
+        print('Message parsing error: $e');
       }
     });
 
@@ -174,7 +180,14 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'decline_btn',
                       backgroundColor: const Color(0xFFD32F2F),
                       onPressed: () {
-                        _socket.emit('call_rejected');
+                        // Send Piggyback rejection
+                        _socket.emit('send_message', {
+                          'sender': 'SYSTEM_SIGNAL',
+                          'fromDevice': senderName,
+                          'signalType': 'call_rejected',
+                          'data': {},
+                          'timestamp': DateTime.now().toIso8601String(),
+                        });
                         Navigator.pop(context);
                       },
                       child: const Icon(
@@ -186,9 +199,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'accept_btn',
                       backgroundColor: const Color(0xFF38ef7d),
                       onPressed: () {
-                        // FIX: DO NOT emit 'call_accepted' here! Let CallScreen do it.
                         Navigator.pop(context);
-
                         Navigator.push(
                           context,
                           MaterialPageRoute(
@@ -311,7 +322,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       size: 22,
                     ),
                     onPressed: _startAudioCall,
-                    tooltip: 'Audio Call',
                   ),
                   IconButton(
                     icon: const Icon(
@@ -320,7 +330,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       size: 24,
                     ),
                     onPressed: _startVideoCall,
-                    tooltip: 'Video Call',
                   ),
                   IconButton(
                     icon: const Icon(
@@ -328,12 +337,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       color: Colors.white,
                       size: 22,
                     ),
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Opening Settings...')),
-                      );
-                    },
-                    tooltip: 'Settings',
+                    onPressed: () {},
                   ),
                   const SizedBox(width: 8),
                 ],
