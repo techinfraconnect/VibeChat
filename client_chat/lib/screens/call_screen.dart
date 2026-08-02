@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -67,23 +68,32 @@ class _CallScreenState extends State<CallScreen> {
     _initCallSession();
   }
 
-  // Safely sets audio routing ONLY after connection is established
+  // PRO FIX 2: iOS Native Audio Crash Prevention
   Future<void> _safeAudioRouting() async {
     if (!mounted) return;
     try {
-      // Point 5 Fix: Ensure default audio routes appropriately
       bool shouldBeSpeaker = widget.isVideoCall;
       setState(() {
         _isSpeakerOn = shouldBeSpeaker;
       });
-      await Helper.setSpeakerphoneOn(shouldBeSpeaker);
+
+      // iOS natively defaults to earpiece for WebRTC. Forcing this command on iOS causes a fatal C++ crash.
+      // We ONLY force it on Android.
+      if (Platform.isAndroid) {
+        await Helper.setSpeakerphoneOn(shouldBeSpeaker);
+      }
     } catch (e) {
-      print('⚠️ iOS Audio Route Warning (Ignored safely): $e');
+      print('⚠️ Audio Route Warning: $e');
     }
   }
 
   Future<void> _initCallSession() async {
     try {
+      // PRO FIX 1: The UI Animation Delay
+      // Accessing hardware during iOS screen transition causes a fatal Metal crash.
+      // We MUST let the new screen settle for 500ms before turning on the camera.
+      await Future.delayed(const Duration(milliseconds: 500));
+
       await _localRenderer.initialize();
       await _remoteRenderer.initialize();
 
@@ -128,7 +138,6 @@ class _CallScreenState extends State<CallScreen> {
           ? Map<String, dynamic>.from(msg['data'])
           : <String, dynamic>{};
 
-      // Point 1-4 Fix: Force two-way media constraints
       final Map<String, dynamic> sdpConstraints = {
         "mandatory": {
           "OfferToReceiveAudio": true,
@@ -230,9 +239,7 @@ class _CallScreenState extends State<CallScreen> {
     try {
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
-        'video': widget.isVideoCall
-            ? {'facingMode': _isFrontCamera ? 'user' : 'environment'}
-            : false,
+        'video': widget.isVideoCall,
       });
     } catch (e) {
       print('❌ MEDIA ERROR (Tier 1): $e');
@@ -257,8 +264,7 @@ class _CallScreenState extends State<CallScreen> {
       setState(() {
         _localRenderer.srcObject = _localStream;
       });
-      // CRITICAL iOS FIX: Removed early audio routing here.
-      // It is now safely delayed until the WebRTC connection is established.
+      await _safeAudioRouting();
     }
   }
 
@@ -266,7 +272,6 @@ class _CallScreenState extends State<CallScreen> {
     _peerConnection = await createPeerConnection(_peerConnectionConfig);
 
     if (_localStream != null) {
-      // Point 1-4 Fix: addStream ensures Audio/Video are bundled properly
       await _peerConnection!.addStream(_localStream!);
     }
 
@@ -278,7 +283,6 @@ class _CallScreenState extends State<CallScreen> {
             _callStatus = "Connected Live";
           });
         }
-        // Safely route audio now that iOS is ready
         _safeAudioRouting();
       }
     };
@@ -358,9 +362,11 @@ class _CallScreenState extends State<CallScreen> {
   void _toggleSpeaker() async {
     setState(() => _isSpeakerOn = !_isSpeakerOn);
     try {
-      await Helper.setSpeakerphoneOn(_isSpeakerOn);
+      if (Platform.isAndroid) {
+        await Helper.setSpeakerphoneOn(_isSpeakerOn);
+      }
     } catch (e) {
-      print("⚠️ iOS Speakerphone toggle warning: $e");
+      print("⚠️ Audio toggle warning: $e");
     }
   }
 
@@ -408,7 +414,6 @@ class _CallScreenState extends State<CallScreen> {
                         ),
                       ),
 
-                      // Point 6 Fix: Bounded, Floatable PIP
                       if (_pipInitialized)
                         Positioned(
                           left: _pipPosition.dx,
