@@ -65,10 +65,16 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _isSpeakerOn = widget.isVideoCall;
-    _initCallSession();
+
+    // THE PRO FIX: Wait for the UI transition to complete!
+    // Booting WebRTC hardware while the screen is sliding causes an iOS Metal crash.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) _initCallSession();
+      });
+    });
   }
 
-  // PRO FIX 2: Prevent iOS Native Audio Engine Crash
   Future<void> _safeAudioRouting() async {
     if (!mounted) return;
     try {
@@ -76,10 +82,7 @@ class _CallScreenState extends State<CallScreen> {
       setState(() {
         _isSpeakerOn = shouldBeSpeaker;
       });
-
-      // CRITICAL: iOS natively handles audio routing for WebRTC perfectly.
-      // Forcing this command programmatically on iOS causes a SIGKILL crash.
-      // We ONLY execute this on Android.
+      // ONLY enforce on Android. iOS handles default earpiece natively.
       if (Platform.isAndroid) {
         await Helper.setSpeakerphoneOn(shouldBeSpeaker);
       }
@@ -90,10 +93,6 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _initCallSession() async {
     try {
-      // PRO FIX 3: Let the UI transition finish before hitting hardware.
-      // Accessing the camera during a route transition causes iOS Metal crashes.
-      await Future.delayed(const Duration(milliseconds: 500));
-
       await _localRenderer.initialize();
       await _remoteRenderer.initialize();
 
@@ -363,8 +362,6 @@ class _CallScreenState extends State<CallScreen> {
   void _toggleSpeaker() async {
     setState(() => _isSpeakerOn = !_isSpeakerOn);
     try {
-      // It is safe to allow manual user toggles on iOS,
-      // the crash only happens when forced automatically during boot
       await Helper.setSpeakerphoneOn(_isSpeakerOn);
     } catch (e) {
       print("⚠️ Audio toggle warning: $e");
@@ -414,7 +411,6 @@ class _CallScreenState extends State<CallScreen> {
                               RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                         ),
                       ),
-
                       if (_pipInitialized)
                         Positioned(
                           left: _pipPosition.dx,
@@ -472,7 +468,6 @@ class _CallScreenState extends State<CallScreen> {
                             ),
                           ),
                         ),
-
                       Positioned(
                         top: 20,
                         left: 20,
@@ -538,7 +533,6 @@ class _CallScreenState extends State<CallScreen> {
                       ],
                     ),
                   ),
-
             Positioned(
               bottom: 30,
               left: 20,

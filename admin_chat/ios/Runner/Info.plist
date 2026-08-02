@@ -26,10 +26,21 @@
     <string>$(FLUTTER_BUILD_NUMBER)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    
     <key>NSCameraUsageDescription</key>
     <string>VibeChat requires camera access to enable video calls with participants.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>VibeChat requires microphone access to enable crystal-clear audio during calls.</string>
+    
+    <!-- APPLE LOCAL NETWORK SECURITY FIX (REQUIRED FOR WEBRTC) -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>VibeChat requires local network access to establish secure peer-to-peer WebRTC calls.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_bonjour._tcp</string>
+        <string>_lnp._tcp.</string>
+    </array>
+
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
