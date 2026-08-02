@@ -16,7 +16,8 @@ class AdminChatApp extends StatelessWidget {
     return MaterialApp(
       title: 'Admin Chat',
       theme: ThemeData(primarySwatch: Colors.green),
-      home: const AdminChatScreen(),
+      // FIX: Changed from AdminChatScreen() to ChatScreen() and passed the required senderName
+      home: const ChatScreen(senderName: 'Admin'),
     );
   }
 }

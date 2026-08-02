@@ -17,7 +17,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   List<Map<String, dynamic>> _messages = [];
 
-  bool _isCallDialogOpen = false; // Tracks ghost dialog status
+  bool _isCallDialogOpen = false;
 
   @override
   void initState() {
@@ -57,8 +57,7 @@ class _ChatScreenState extends State<ChatScreen> {
       },
     );
 
-    _socket.connect();
-
+    // FIX: Add all listeners BEFORE calling _socket.connect()
     _socket.onConnect((_) {
       print('🟢 Connected to server');
     });
@@ -90,12 +89,9 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     });
 
-    // ---------------------------------------------------------
-    // BULLETPROOF INCOMING CALL LISTENER
-    // ---------------------------------------------------------
     _socket.on('incoming_call', (data) {
       print('🔔 Raw incoming call data received');
-      if (!mounted) return;
+      if (!mounted || _isCallDialogOpen) return;
 
       try {
         final Map<String, dynamic> callData;
@@ -105,14 +101,12 @@ class _ChatScreenState extends State<ChatScreen> {
           callData = Map<String, dynamic>.from(data);
         }
 
-        // FIX: Trigger dialog instantly to wake up UI Engine
         _showIncomingCallDialog(callData);
       } catch (e) {
         print('❌ Error parsing incoming call payload: $e');
       }
     });
 
-    // FIX: Ghost Dialog Prevention
     _socket.on('end-call', (_) {
       if (_isCallDialogOpen && mounted) {
         Navigator.pop(context);
@@ -120,6 +114,9 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     _socket.onDisconnect((_) => print('🔴 Disconnected'));
+
+    // Execute connection last
+    _socket.connect();
   }
 
   void _showIncomingCallDialog(Map<String, dynamic> data) {
@@ -208,7 +205,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'accept_btn_admin',
                       backgroundColor: const Color(0xFF38ef7d),
                       onPressed: () {
-                        _socket.emit('call_accepted');
+                        // FIX: DO NOT emit 'call_accepted' here!
                         Navigator.pop(context);
 
                         Navigator.push(
@@ -236,7 +233,6 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
     ).then((_) {
-      // Fires automatically when dialog is dismissed
       _isCallDialogOpen = false;
     });
   }

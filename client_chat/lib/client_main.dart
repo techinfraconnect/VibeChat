@@ -16,7 +16,8 @@ class ClientChatApp extends StatelessWidget {
     return MaterialApp(
       title: 'Client Chat',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const ClientChatScreen(),
+      // FIX: Changed from ClientChatScreen() to ChatScreen()
+      home: const ChatScreen(),
     );
   }
 }
