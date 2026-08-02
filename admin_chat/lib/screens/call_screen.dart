@@ -35,15 +35,22 @@ class _CallScreenState extends State<CallScreen> {
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
 
-  // ICE Candidate Queue State Variables
+  // ICE Candidate Queue
   List<RTCIceCandidate> _queuedRemoteCandidates = [];
   bool _isRemoteDescriptionSet = false;
 
-  final Map<String, dynamic> _iceServers = {
+  final Map<String, dynamic> _peerConnectionConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
     ],
+    'sdpSemantics': 'unified-plan', // FORCES MODERN WEBRTC ROUTING
+  };
+
+  // Enforce the receiving of media even if local hardware fails
+  final Map<String, dynamic> _offerSdpConstraints = {
+    "mandatory": {"OfferToReceiveAudio": true, "OfferToReceiveVideo": true},
+    "optional": [],
   };
 
   String get myName => widget.callerName == 'Admin' ? 'Client' : 'Admin';
@@ -89,7 +96,9 @@ class _CallScreenState extends State<CallScreen> {
       if (type == 'call_accepted' && widget.isCaller) {
         if (mounted)
           setState(() => _callStatus = "Establishing Secure Call...");
-        RTCSessionDescription offer = await _peerConnection!.createOffer();
+        RTCSessionDescription offer = await _peerConnection!.createOffer(
+          _offerSdpConstraints,
+        );
         await _peerConnection!.setLocalDescription(offer);
         _sendSignal('offer', {'type': offer.type, 'sdp': offer.sdp});
       } else if (type == 'call_rejected') {
@@ -109,7 +118,9 @@ class _CallScreenState extends State<CallScreen> {
         _isRemoteDescriptionSet = true;
         _processQueuedCandidates();
 
-        RTCSessionDescription answer = await _peerConnection!.createAnswer();
+        RTCSessionDescription answer = await _peerConnection!.createAnswer(
+          _offerSdpConstraints,
+        );
         await _peerConnection!.setLocalDescription(answer);
         _sendSignal('answer', {'type': answer.type, 'sdp': answer.sdp});
       } else if (type == 'answer' && widget.isCaller) {
@@ -142,9 +153,8 @@ class _CallScreenState extends State<CallScreen> {
       } else if (type == 'end-call') {
         if (mounted) Navigator.pop(context);
       }
-    } catch (e, stacktrace) {
+    } catch (e) {
       print('❌ SIGNAL PARSE ERROR: $e');
-      print(stacktrace);
     }
   }
 
@@ -176,37 +186,44 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _startLocalStream() async {
-    // PRO FIX 1: Simplify constraints to prevent hardware API crashes
+    // PRO FIX 1: Strict constraints ensure the camera opens cleanly on picky Android devices
     final Map<String, dynamic> mediaConstraints = {
       'audio': true,
-      'video': widget.isVideoCall, // Let the OS pick the safest default camera
+      'video': widget.isVideoCall
+          ? {
+              'mandatory': {
+                'minWidth': '640',
+                'minHeight': '480',
+                'minFrameRate': '30',
+              },
+              'facingMode': _isFrontCamera ? 'user' : 'environment',
+              'optional': [],
+            }
+          : false,
     };
 
     try {
-      print('🎥 Attempting to grab local media stream...');
       _localStream = await navigator.mediaDevices.getUserMedia(
         mediaConstraints,
       );
-      _localRenderer.srcObject = _localStream;
-
+      if (mounted) {
+        setState(() {
+          _localRenderer.srcObject = _localStream;
+        });
+      }
       Helper.setSpeakerphoneOn(_isSpeakerOn);
-      setState(() {});
-      print('✅ Local media stream grabbed successfully!');
     } catch (e) {
-      print('❌ ERROR GRABBING MEDIA (Video+Audio): $e');
+      print('❌ ERROR GRABBING MEDIA: $e');
 
-      // PRO FIX 2: If the camera completely fails, force an Audio-Only fallback so voice STILL works!
+      // Fallback to audio-only if camera strictly fails
       if (widget.isVideoCall) {
         try {
-          print('🔄 Attempting fallback to Audio-Only...');
           _localStream = await navigator.mediaDevices.getUserMedia({
             'audio': true,
             'video': false,
           });
-          _localRenderer.srcObject = _localStream;
+          if (mounted) setState(() => _localRenderer.srcObject = _localStream);
           Helper.setSpeakerphoneOn(_isSpeakerOn);
-          setState(() {});
-          print('✅ Fallback Audio stream grabbed successfully!');
         } catch (fallbackError) {
           print('❌ FALLBACK AUDIO ALSO FAILED: $fallbackError');
         }
@@ -215,15 +232,16 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _createPeerConnection() async {
-    _peerConnection = await createPeerConnection(_iceServers);
+    _peerConnection = await createPeerConnection(_peerConnectionConfig);
 
     if (_localStream != null) {
-      _localStream!.getTracks().forEach((track) {
-        _peerConnection!.addTrack(track, _localStream!);
-      });
+      // PRO FIX 2: We MUST await the track attachments.
+      // This stops the empty "Answer" race condition dead in its tracks!
+      for (var track in _localStream!.getTracks()) {
+        await _peerConnection!.addTrack(track, _localStream!);
+      }
     }
 
-    // PRO FIX 3: Force UI to "Connected Live" upon network connection, even if video is missing
     _peerConnection!.onConnectionState = (state) {
       print('📡 WebRTC State: $state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
@@ -325,7 +343,6 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _toggleCameraDirection() async {
-    // Safely check if video tracks exist before flipping to prevent crashes
     if (_localStream != null && widget.isVideoCall) {
       final videoTracks = _localStream!.getVideoTracks();
       if (videoTracks.isNotEmpty) {
