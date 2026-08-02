@@ -40,9 +40,8 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('call_rejected');
   });
 
-
   // ---------------------------------------------------------
-  // STANDARD WEBRTC SIGNALING
+  // STANDARD WEBRTC SIGNALING 
   // ---------------------------------------------------------
   socket.on('offer', (data) => {
     console.log('📞 Offer received, routing to peer...');

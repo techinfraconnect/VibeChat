@@ -17,6 +17,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   List<Map<String, dynamic>> _messages = [];
 
+  bool _isCallDialogOpen = false; // Tracks ghost dialog status
+
   @override
   void initState() {
     super.initState();
@@ -92,7 +94,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // BULLETPROOF INCOMING CALL LISTENER
     // ---------------------------------------------------------
     _socket.on('incoming_call', (data) {
-      print('🔔 Raw incoming call data: $data');
+      print('🔔 Raw incoming call data received');
       if (!mounted) return;
 
       try {
@@ -103,12 +105,17 @@ class _ChatScreenState extends State<ChatScreen> {
           callData = Map<String, dynamic>.from(data);
         }
 
-        // Trigger the dialog cleanly in the next frame
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _showIncomingCallDialog(callData);
-        });
+        // FIX: Trigger dialog instantly to wake up UI Engine
+        _showIncomingCallDialog(callData);
       } catch (e) {
         print('❌ Error parsing incoming call payload: $e');
+      }
+    });
+
+    // FIX: Ghost Dialog Prevention
+    _socket.on('end-call', (_) {
+      if (_isCallDialogOpen && mounted) {
+        Navigator.pop(context);
       }
     });
 
@@ -118,6 +125,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _showIncomingCallDialog(Map<String, dynamic> data) {
     final String caller = data['callerName'] ?? 'Unknown';
     final bool isVideo = data['isVideoCall'] ?? false;
+
+    _isCallDialogOpen = true;
 
     showDialog(
       context: context,
@@ -226,7 +235,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       },
-    );
+    ).then((_) {
+      // Fires automatically when dialog is dismissed
+      _isCallDialogOpen = false;
+    });
   }
 
   void _sendMessage() {

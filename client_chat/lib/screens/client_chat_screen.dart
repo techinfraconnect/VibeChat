@@ -18,6 +18,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   List<Map<String, dynamic>> _messages = [];
 
+  // NEW: Tracks if the incoming call dialog is actively showing
+  bool _isCallDialogOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -59,37 +62,27 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     _socket.on('receive_message', (data) {
-      try {
-        final Map<String, dynamic> incomingMessage;
-        if (data is List && data.isNotEmpty) {
-          incomingMessage = Map<String, dynamic>.from(data[0]);
-        } else {
-          incomingMessage = Map<String, dynamic>.from(data);
+      final incomingMessage = Map<String, dynamic>.from(data);
+      setState(() {
+        bool exists = _messages.any(
+          (m) =>
+              m['timestamp'] == incomingMessage['timestamp'] &&
+              m['text'] == incomingMessage['text'] &&
+              m['sender'] == incomingMessage['sender'],
+        );
+
+        if (!exists) {
+          _messages.insert(0, incomingMessage);
+          _saveMessages();
         }
-
-        setState(() {
-          bool exists = _messages.any(
-            (m) =>
-                m['timestamp'] == incomingMessage['timestamp'] &&
-                m['text'] == incomingMessage['text'] &&
-                m['sender'] == incomingMessage['sender'],
-          );
-
-          if (!exists) {
-            _messages.insert(0, incomingMessage);
-            _saveMessages();
-          }
-        });
-      } catch (e) {
-        print('Message parsing error: $e');
-      }
+      });
     });
 
     // ---------------------------------------------------------
     // BULLETPROOF INCOMING CALL LISTENER
     // ---------------------------------------------------------
     _socket.on('incoming_call', (data) {
-      print('🔔 Raw incoming call data: $data');
+      print('🔔 Raw incoming call data received');
       if (!mounted) return;
 
       try {
@@ -100,12 +93,17 @@ class _ChatScreenState extends State<ChatScreen> {
           callData = Map<String, dynamic>.from(data);
         }
 
-        // Trigger the dialog cleanly in the next frame
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _showIncomingCallDialog(callData);
-        });
+        // FIX: Call directly to force the Flutter Engine to wake up instantly!
+        _showIncomingCallDialog(callData);
       } catch (e) {
         print('❌ Error parsing incoming call payload: $e');
+      }
+    });
+
+    // FIX: Ghost Dialog Prevention
+    _socket.on('end-call', (_) {
+      if (_isCallDialogOpen && mounted) {
+        Navigator.pop(context); // Dismiss the dialog if caller hangs up
       }
     });
 
@@ -115,6 +113,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _showIncomingCallDialog(Map<String, dynamic> data) {
     final String caller = data['callerName'] ?? 'Unknown';
     final bool isVideo = data['isVideoCall'] ?? false;
+
+    _isCallDialogOpen = true;
 
     showDialog(
       context: context,
@@ -217,7 +217,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       },
-    );
+    ).then((_) {
+      // Fires automatically when the dialog is dismissed for any reason
+      _isCallDialogOpen = false;
+    });
   }
 
   void _sendMessage() {
