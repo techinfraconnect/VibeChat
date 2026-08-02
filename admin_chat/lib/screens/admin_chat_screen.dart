@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -61,25 +62,19 @@ class _ChatScreenState extends State<ChatScreen> {
       print('🟢 Connected to server');
     });
 
-    // ---------------------------------------------------------
-    // THE PIGGYBACK PROTOCOL
-    // ---------------------------------------------------------
     _socket.on('receive_message', (payload) {
       try {
         final incomingMessage = Map<String, dynamic>.from(
           payload is List ? payload.first : payload,
         );
 
-        // 1. INTERCEPT SYSTEM SIGNALS
         if (incomingMessage['sender'] == 'SYSTEM_SIGNAL') {
-          // Ignore signals sent by myself
           if (incomingMessage['fromDevice'] == widget.senderName) return;
 
           String type = incomingMessage['signalType'] ?? '';
           if (type == 'call_invite') {
             if (!mounted || _isCallDialogOpen) return;
 
-            // FIX: Explicitly type the empty map as <String, dynamic>{}
             Map<String, dynamic> data = incomingMessage['data'] != null
                 ? Map<String, dynamic>.from(incomingMessage['data'])
                 : <String, dynamic>{};
@@ -87,13 +82,13 @@ class _ChatScreenState extends State<ChatScreen> {
             _showIncomingCallDialog(data);
           } else if (type == 'end-call') {
             if (_isCallDialogOpen && mounted) {
+              FlutterRingtonePlayer.stop();
               Navigator.pop(context);
             }
           }
-          return; // Stop processing so it doesn't show in the chat UI
+          return;
         }
 
-        // 2. NORMAL CHAT MESSAGES
         setState(() {
           bool exists = _messages.any(
             (m) =>
@@ -113,8 +108,6 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     _socket.onDisconnect((_) => print('🔴 Disconnected'));
-
-    // Execute connection last
     _socket.connect();
   }
 
@@ -123,6 +116,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final bool isVideo = data['isVideoCall'] ?? false;
 
     _isCallDialogOpen = true;
+    FlutterRingtonePlayer.playRingtone(looping: true);
 
     showDialog(
       context: context,
@@ -192,6 +186,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'decline_btn_admin',
                       backgroundColor: const Color(0xFFD32F2F),
                       onPressed: () {
+                        FlutterRingtonePlayer.stop();
                         _socket.emit('send_message', {
                           'sender': 'SYSTEM_SIGNAL',
                           'fromDevice': widget.senderName,
@@ -210,6 +205,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'accept_btn_admin',
                       backgroundColor: const Color(0xFF38ef7d),
                       onPressed: () {
+                        FlutterRingtonePlayer.stop();
                         Navigator.pop(context);
                         Navigator.push(
                           context,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 
 class CallScreen extends StatefulWidget {
   final String callerName;
@@ -23,7 +24,7 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   bool _isMuted = false;
   bool _isVideoOff = false;
-  bool _isSpeakerOn = true;
+  late bool _isSpeakerOn;
   bool _isFrontCamera = true;
   bool _isRemoteConnected = false;
 
@@ -35,19 +36,32 @@ class _CallScreenState extends State<CallScreen> {
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
 
-  // ICE Candidate Queue
   List<RTCIceCandidate> _queuedRemoteCandidates = [];
   bool _isRemoteDescriptionSet = false;
 
+  // PIP State
+  bool _pipSet = false;
+  double _pipX = 0;
+  double _pipY = 0;
+
+  // TURN SERVERS FOR JIO/4G NAT TRAVERSAL
   final Map<String, dynamic> _peerConnectionConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
+      {
+        'urls': 'turn:global.relay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:global.relay.metered.ca:443',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
     ],
-    'sdpSemantics': 'unified-plan', // FORCES MODERN WEBRTC ROUTING
+    'sdpSemantics': 'unified-plan',
   };
 
-  // Enforce the receiving of media even if local hardware fails
   final Map<String, dynamic> _offerSdpConstraints = {
     "mandatory": {"OfferToReceiveAudio": true, "OfferToReceiveVideo": true},
     "optional": [],
@@ -58,6 +72,9 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
+    FlutterRingtonePlayer.stop();
+    // AUDIO CALLS DEFAULT TO EARPIECE (FALSE). VIDEO DEFAULTS TO LOUDSPEAKER (TRUE)
+    _isSpeakerOn = widget.isVideoCall;
     _initCallSession();
   }
 
@@ -94,6 +111,7 @@ class _CallScreenState extends State<CallScreen> {
           : <String, dynamic>{};
 
       if (type == 'call_accepted' && widget.isCaller) {
+        FlutterRingtonePlayer.stop();
         if (mounted)
           setState(() => _callStatus = "Establishing Secure Call...");
         RTCSessionDescription offer = await _peerConnection!.createOffer(
@@ -102,6 +120,7 @@ class _CallScreenState extends State<CallScreen> {
         await _peerConnection!.setLocalDescription(offer);
         _sendSignal('offer', {'type': offer.type, 'sdp': offer.sdp});
       } else if (type == 'call_rejected') {
+        FlutterRingtonePlayer.stop();
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Call was declined')));
@@ -166,15 +185,17 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _setupSignalingListeners() async {
-    print(
-      '🟢 CallScreen Active (isCaller: ${widget.isCaller}) using Shared Socket via Piggyback',
-    );
     await _createPeerConnection();
-
     widget.socket.on('receive_message', _onSignalReceived);
 
     if (widget.isCaller) {
       setState(() => _callStatus = "Ringing...");
+      FlutterRingtonePlayer.play(
+        android: AndroidSounds.ringtone,
+        ios: IosSounds.glass,
+        looping: true,
+      );
+
       _sendSignal('call_invite', {
         'callerName': myName,
         'isVideoCall': widget.isVideoCall,
@@ -186,20 +207,10 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _startLocalStream() async {
-    // PRO FIX 1: Strict constraints ensure the camera opens cleanly on picky Android devices
+    // SAFE CONSTRAINTS TO PREVENT PIP BLANKING
     final Map<String, dynamic> mediaConstraints = {
       'audio': true,
-      'video': widget.isVideoCall
-          ? {
-              'mandatory': {
-                'minWidth': '640',
-                'minHeight': '480',
-                'minFrameRate': '30',
-              },
-              'facingMode': _isFrontCamera ? 'user' : 'environment',
-              'optional': [],
-            }
-          : false,
+      'video': widget.isVideoCall ? true : false,
     };
 
     try {
@@ -214,8 +225,6 @@ class _CallScreenState extends State<CallScreen> {
       Helper.setSpeakerphoneOn(_isSpeakerOn);
     } catch (e) {
       print('❌ ERROR GRABBING MEDIA: $e');
-
-      // Fallback to audio-only if camera strictly fails
       if (widget.isVideoCall) {
         try {
           _localStream = await navigator.mediaDevices.getUserMedia({
@@ -235,15 +244,12 @@ class _CallScreenState extends State<CallScreen> {
     _peerConnection = await createPeerConnection(_peerConnectionConfig);
 
     if (_localStream != null) {
-      // PRO FIX 2: We MUST await the track attachments.
-      // This stops the empty "Answer" race condition dead in its tracks!
       for (var track in _localStream!.getTracks()) {
         await _peerConnection!.addTrack(track, _localStream!);
       }
     }
 
     _peerConnection!.onConnectionState = (state) {
-      print('📡 WebRTC State: $state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         if (mounted)
           setState(() {
@@ -254,7 +260,6 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     _peerConnection!.onIceConnectionState = (state) {
-      print('🧊 ICE State: $state');
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         if (mounted)
@@ -266,7 +271,6 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     _peerConnection!.onTrack = (event) {
-      print('📺 Track Received: ${event.track.kind}');
       if (event.streams.isNotEmpty) {
         if (mounted) {
           setState(() {
@@ -301,15 +305,14 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    FlutterRingtonePlayer.stop();
     _sendSignal('end-call', <String, dynamic>{});
-
     widget.socket.off('receive_message', _onSignalReceived);
 
     _localStream?.dispose();
     _peerConnection?.dispose();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
-
     super.dispose();
   }
 
@@ -356,6 +359,12 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_pipSet) {
+      _pipX = MediaQuery.of(context).size.width - 120;
+      _pipY = 20;
+      _pipSet = true;
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
       body: SafeArea(
@@ -364,25 +373,47 @@ class _CallScreenState extends State<CallScreen> {
             widget.isVideoCall && _isRemoteConnected
                 ? Stack(
                     children: [
+                      // Remote Video
                       Positioned.fill(
                         child: RTCVideoView(_remoteRenderer, mirror: false),
                       ),
+
+                      // DRAGGABLE PIP
                       Positioned(
-                        top: 20,
-                        right: 20,
-                        child: Container(
-                          width: 100,
-                          height: 150,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white24, width: 2),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: RTCVideoView(_localRenderer, mirror: true),
+                        left: _pipX,
+                        top: _pipY,
+                        child: GestureDetector(
+                          onPanUpdate: (details) {
+                            setState(() {
+                              _pipX += details.delta.dx;
+                              _pipY += details.delta.dy;
+                            });
+                          },
+                          child: Container(
+                            width: 100,
+                            height: 150,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: Colors.white24,
+                                width: 2,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black54,
+                                  blurRadius: 10,
+                                  spreadRadius: 1,
+                                ),
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: RTCVideoView(_localRenderer, mirror: true),
+                            ),
                           ),
                         ),
                       ),
+
                       Positioned(
                         top: 20,
                         left: 20,
@@ -490,7 +521,7 @@ class _CallScreenState extends State<CallScreen> {
                               ? Icons.volume_up_rounded
                               : Icons.hearing_rounded,
                           label: 'Speaker',
-                          isActive: false,
+                          isActive: _isSpeakerOn, // UI syncs with default
                           onPressed: _toggleSpeaker,
                         ),
                       ],
