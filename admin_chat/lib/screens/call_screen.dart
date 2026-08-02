@@ -42,7 +42,6 @@ class _CallScreenState extends State<CallScreen> {
     ],
   };
 
-  // Helper to determine the device's own name
   String get myName => widget.callerName == 'Admin' ? 'Client' : 'Admin';
 
   @override
@@ -58,9 +57,6 @@ class _CallScreenState extends State<CallScreen> {
     _setupSignalingListeners();
   }
 
-  // ---------------------------------------------------------
-  // PIGGYBACK PROTOCOL EMITTER
-  // ---------------------------------------------------------
   void _sendSignal(String type, Map<String, dynamic> data) {
     widget.socket.emit('send_message', {
       'sender': 'SYSTEM_SIGNAL',
@@ -71,9 +67,6 @@ class _CallScreenState extends State<CallScreen> {
     });
   }
 
-  // ---------------------------------------------------------
-  // PIGGYBACK PROTOCOL RECEIVER
-  // ---------------------------------------------------------
   void _onSignalReceived(dynamic payload) async {
     if (!mounted) return;
     try {
@@ -81,15 +74,15 @@ class _CallScreenState extends State<CallScreen> {
         payload is List ? payload.first : payload,
       );
 
-      // We only care about SYSTEM_SIGNAL
       if (msg['sender'] != 'SYSTEM_SIGNAL') return;
-      // We ignore echoes of our own signals
       if (msg['fromDevice'] == myName) return;
 
       final type = msg['signalType'];
-      final data = msg['data'] != null
+
+      // FIX: Explicitly type the empty map as <String, dynamic>{}
+      final Map<String, dynamic> data = msg['data'] != null
           ? Map<String, dynamic>.from(msg['data'])
-          : {};
+          : <String, dynamic>{};
 
       if (type == 'call_accepted' && widget.isCaller) {
         if (mounted)
@@ -137,7 +130,6 @@ class _CallScreenState extends State<CallScreen> {
     );
     await _createPeerConnection();
 
-    // Attach listener for all incoming signals
     widget.socket.on('receive_message', _onSignalReceived);
 
     if (widget.isCaller) {
@@ -148,8 +140,7 @@ class _CallScreenState extends State<CallScreen> {
       });
     } else {
       setState(() => _callStatus = "Connecting secure line...");
-      // Receiver tells Caller "I am ready"
-      _sendSignal('call_accepted', {});
+      _sendSignal('call_accepted', <String, dynamic>{});
     }
   }
 
@@ -204,9 +195,8 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
-    _sendSignal('end-call', {});
+    _sendSignal('end-call', <String, dynamic>{});
 
-    // Specifically unbind the Piggyback listener so it doesn't leak
     widget.socket.off('receive_message', _onSignalReceived);
 
     _localStream?.dispose();

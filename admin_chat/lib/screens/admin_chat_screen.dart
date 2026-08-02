@@ -78,9 +78,12 @@ class _ChatScreenState extends State<ChatScreen> {
           String type = incomingMessage['signalType'] ?? '';
           if (type == 'call_invite') {
             if (!mounted || _isCallDialogOpen) return;
-            var data = incomingMessage['data'] != null
+
+            // FIX: Explicitly type the empty map as <String, dynamic>{}
+            Map<String, dynamic> data = incomingMessage['data'] != null
                 ? Map<String, dynamic>.from(incomingMessage['data'])
-                : {};
+                : <String, dynamic>{};
+
             _showIncomingCallDialog(data);
           } else if (type == 'end-call') {
             if (_isCallDialogOpen && mounted) {
@@ -193,7 +196,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           'sender': 'SYSTEM_SIGNAL',
                           'fromDevice': widget.senderName,
                           'signalType': 'call_rejected',
-                          'data': {},
+                          'data': <String, dynamic>{},
                           'timestamp': DateTime.now().toIso8601String(),
                         });
                         Navigator.pop(context);
