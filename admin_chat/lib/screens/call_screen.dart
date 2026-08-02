@@ -122,7 +122,6 @@ class _CallScreenState extends State<CallScreen> {
         _isRemoteDescriptionSet = true;
         _processQueuedCandidates();
       } else if (type == 'ice-candidate') {
-        // PRO FIX: Strict type casting prevents fatal silent background crashes!
         String? candidateStr = data['candidate']?.toString();
         String? sdpMid = data['sdpMid']?.toString();
         int? sdpMLineIndex = data['sdpMLineIndex'] != null
@@ -177,25 +176,41 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _startLocalStream() async {
+    // PRO FIX 1: Simplify constraints to prevent hardware API crashes
     final Map<String, dynamic> mediaConstraints = {
       'audio': true,
-      'video': widget.isVideoCall
-          ? {'facingMode': _isFrontCamera ? 'user' : 'environment'}
-          : false,
+      'video': widget.isVideoCall, // Let the OS pick the safest default camera
     };
 
     try {
+      print('🎥 Attempting to grab local media stream...');
       _localStream = await navigator.mediaDevices.getUserMedia(
         mediaConstraints,
       );
       _localRenderer.srcObject = _localStream;
 
-      // Ensure audio routes correctly
       Helper.setSpeakerphoneOn(_isSpeakerOn);
-
       setState(() {});
+      print('✅ Local media stream grabbed successfully!');
     } catch (e) {
-      print('Error accessing media devices: $e');
+      print('❌ ERROR GRABBING MEDIA (Video+Audio): $e');
+
+      // PRO FIX 2: If the camera completely fails, force an Audio-Only fallback so voice STILL works!
+      if (widget.isVideoCall) {
+        try {
+          print('🔄 Attempting fallback to Audio-Only...');
+          _localStream = await navigator.mediaDevices.getUserMedia({
+            'audio': true,
+            'video': false,
+          });
+          _localRenderer.srcObject = _localStream;
+          Helper.setSpeakerphoneOn(_isSpeakerOn);
+          setState(() {});
+          print('✅ Fallback Audio stream grabbed successfully!');
+        } catch (fallbackError) {
+          print('❌ FALLBACK AUDIO ALSO FAILED: $fallbackError');
+        }
+      }
     }
   }
 
@@ -208,7 +223,7 @@ class _CallScreenState extends State<CallScreen> {
       });
     }
 
-    // PRO FIX: Bulletproof Fallback UI updaters
+    // PRO FIX 3: Force UI to "Connected Live" upon network connection, even if video is missing
     _peerConnection!.onConnectionState = (state) {
       print('📡 WebRTC State: $state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
@@ -222,7 +237,8 @@ class _CallScreenState extends State<CallScreen> {
 
     _peerConnection!.onIceConnectionState = (state) {
       print('🧊 ICE State: $state');
-      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         if (mounted)
           setState(() {
             _isRemoteConnected = true;
@@ -283,18 +299,22 @@ class _CallScreenState extends State<CallScreen> {
     setState(() {
       _isMuted = !_isMuted;
     });
-    _localStream?.getAudioTracks().forEach((track) {
-      track.enabled = !_isMuted;
-    });
+    if (_localStream != null) {
+      for (var track in _localStream!.getAudioTracks()) {
+        track.enabled = !_isMuted;
+      }
+    }
   }
 
   void _toggleVideo() {
     setState(() {
       _isVideoOff = !_isVideoOff;
     });
-    _localStream?.getVideoTracks().forEach((track) {
-      track.enabled = !_isVideoOff;
-    });
+    if (_localStream != null) {
+      for (var track in _localStream!.getVideoTracks()) {
+        track.enabled = !_isVideoOff;
+      }
+    }
   }
 
   void _toggleSpeaker() {
@@ -305,12 +325,15 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _toggleCameraDirection() async {
+    // Safely check if video tracks exist before flipping to prevent crashes
     if (_localStream != null && widget.isVideoCall) {
-      final videoTrack = _localStream!.getVideoTracks().first;
-      await Helper.switchCamera(videoTrack);
-      setState(() {
-        _isFrontCamera = !_isFrontCamera;
-      });
+      final videoTracks = _localStream!.getVideoTracks();
+      if (videoTracks.isNotEmpty) {
+        await Helper.switchCamera(videoTracks.first);
+        setState(() {
+          _isFrontCamera = !_isFrontCamera;
+        });
+      }
     }
   }
 
