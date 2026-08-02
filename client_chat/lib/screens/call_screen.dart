@@ -35,6 +35,12 @@ class _CallScreenState extends State<CallScreen> {
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
 
+  // ---------------------------------------------------------
+  // THE PRO FIX: ICE Candidate Queue State Variables
+  // ---------------------------------------------------------
+  List<RTCIceCandidate> _queuedRemoteCandidates = [];
+  bool _isRemoteDescriptionSet = false;
+
   final Map<String, dynamic> _iceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
@@ -78,8 +84,6 @@ class _CallScreenState extends State<CallScreen> {
       if (msg['fromDevice'] == myName) return;
 
       final type = msg['signalType'];
-
-      // FIX: Explicitly type the empty map as <String, dynamic>{}
       final Map<String, dynamic> data = msg['data'] != null
           ? Map<String, dynamic>.from(msg['data'])
           : <String, dynamic>{};
@@ -100,6 +104,11 @@ class _CallScreenState extends State<CallScreen> {
         await _peerConnection!.setRemoteDescription(
           RTCSessionDescription(data['sdp'], data['type']),
         );
+
+        // Mark remote as set and flush any early ICE candidates!
+        _isRemoteDescriptionSet = true;
+        _processQueuedCandidates();
+
         RTCSessionDescription answer = await _peerConnection!.createAnswer();
         await _peerConnection!.setLocalDescription(answer);
         _sendSignal('answer', {'type': answer.type, 'sdp': answer.sdp});
@@ -107,14 +116,23 @@ class _CallScreenState extends State<CallScreen> {
         await _peerConnection?.setRemoteDescription(
           RTCSessionDescription(data['sdp'], data['type']),
         );
+
+        // Mark remote as set and flush any early ICE candidates!
+        _isRemoteDescriptionSet = true;
+        _processQueuedCandidates();
       } else if (type == 'ice-candidate') {
-        if (_peerConnection != null) {
-          RTCIceCandidate candidate = RTCIceCandidate(
-            data['candidate'],
-            data['sdpMid'],
-            data['sdpMLineIndex'],
-          );
+        RTCIceCandidate candidate = RTCIceCandidate(
+          data['candidate'],
+          data['sdpMid'],
+          data['sdpMLineIndex'],
+        );
+
+        // THE PRO FIX: Queue ICE candidates if the Remote Description isn't registered yet!
+        if (_isRemoteDescriptionSet && _peerConnection != null) {
           await _peerConnection!.addCandidate(candidate);
+        } else {
+          _queuedRemoteCandidates.add(candidate);
+          print('📦 Queued an early ICE candidate');
         }
       } else if (type == 'end-call') {
         if (mounted) Navigator.pop(context);
@@ -122,6 +140,19 @@ class _CallScreenState extends State<CallScreen> {
     } catch (e) {
       print('Signal Parse Error: $e');
     }
+  }
+
+  // Flushes the ICE Candidate Queue
+  void _processQueuedCandidates() async {
+    for (var candidate in _queuedRemoteCandidates) {
+      await _peerConnection?.addCandidate(candidate);
+    }
+    if (_queuedRemoteCandidates.isNotEmpty) {
+      print(
+        '✅ Successfully processed ${_queuedRemoteCandidates.length} queued ICE candidates',
+      );
+    }
+    _queuedRemoteCandidates.clear();
   }
 
   void _setupSignalingListeners() async {
@@ -172,10 +203,28 @@ class _CallScreenState extends State<CallScreen> {
       });
     }
 
+    _peerConnection!.onConnectionState = (state) {
+      print('📡 WebRTC Connection State: $state');
+    };
+
+    // Standard video/audio track handler
     _peerConnection!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
+        if (mounted) {
+          setState(() {
+            _remoteRenderer.srcObject = event.streams[0];
+            _isRemoteConnected = true;
+            _callStatus = "Connected Live";
+          });
+        }
+      }
+    };
+
+    // PRO FIX FALLBACK: Handles older WebRTC plugins and strict Audio-Only routing
+    _peerConnection!.onAddStream = (stream) {
+      if (mounted) {
         setState(() {
-          _remoteRenderer.srcObject = event.streams[0];
+          _remoteRenderer.srcObject = stream;
           _isRemoteConnected = true;
           _callStatus = "Connected Live";
         });
