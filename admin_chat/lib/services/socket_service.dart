@@ -11,24 +11,25 @@ class SocketService {
   void initSocket(String username) {
     if (_isInitialized) return;
 
+    // Manual connect approach is much more stable in Flutter
     socket = IO.io(
-      'https://vibechat-server-vo3f.onrender.com:443',
+      'https://vibechat-server-vo3f.onrender.com',
       IO.OptionBuilder()
           .setTransports(['websocket'])
-          .enableAutoConnect()
-          .enableReconnection()
+          .disableAutoConnect() // Disable auto-connect
           .build(),
     );
 
+    // Connect manually
     socket.connect();
 
     socket.onConnect((_) {
-      print('🟢 Admin Socket Connected: ${socket.id} as $username');
-      socket.emit('register_user', username);
+      print('====================================');
+      print('🟢 ADMIN SOCKET CONNECTED SUCCESSFULLY');
+      print('====================================');
     });
 
-    socket.onConnectError((data) => print('❌ Admin Connect Error: $data'));
-    socket.onError((data) => print('❌ Admin Socket Error: $data'));
+    socket.onConnectError((data) => print('❌ ADMIN SOCKET ERROR: $data'));
 
     _isInitialized = true;
   }

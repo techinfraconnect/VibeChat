@@ -32,16 +32,16 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('receive_message', (data) {
       if (!mounted) return;
-      setState(() {
-        _messages.add(Map<String, dynamic>.from(data));
-      });
+      setState(() => _messages.add(Map<String, dynamic>.from(data)));
     });
 
     widget.socket.on('incoming_call', (data) {
+      print(
+        '🔔 ADMIN HEARD INCOMING CALL EVENT: $data',
+      ); // <--- CHECK YOUR CONSOLE FOR THIS
       if (!mounted) return;
-      if (data['callerName']?.toString().toLowerCase() ==
-          widget.senderName.toLowerCase())
-        return;
+      if (data['callerName'] == widget.senderName)
+        return; // Ignore our own echo
       _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }
@@ -51,7 +51,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: Text("Incoming Call from ${data['callerName'] ?? 'Client'}"),
+        title: Text("Incoming Call from ${data['callerName']}"),
         content: Text(
           "Type: ${data['isVideoCall'] == true ? 'Video Call' : 'Audio Call'}",
         ),
@@ -59,25 +59,20 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
-              widget.socket.emit('call_rejected', {
-                'targetUser': data['callerName'],
-              });
+              widget.socket.emit('call_rejected');
             },
             child: const Text("Decline", style: TextStyle(color: Colors.red)),
           ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              widget.socket.emit('call_accepted', {
-                'callerName': widget.senderName,
-                'targetUser': data['callerName'],
-              });
+              widget.socket.emit('call_accepted');
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => CallScreen(
-                    callerName: data['callerName'] ?? 'Client',
-                    targetUser: data['callerName'] ?? 'Client',
+                    callerName: data['callerName'],
+                    targetUser: data['callerName'],
                     isVideoCall: data['isVideoCall'] ?? false,
                     isCaller: false,
                     socket: widget.socket,
@@ -94,20 +89,16 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
   void _sendMessage() {
     if (_messageController.text.trim().isEmpty) return;
-    final messageData = {
+    widget.socket.emit('send_message', {
       'sender': widget.senderName,
       'message': _messageController.text.trim(),
-      'timestamp': DateTime.now().toIso8601String(),
-    };
-    widget.socket.emit('send_message', messageData);
+    });
     _messageController.clear();
   }
 
   void _initiateCall(bool isVideo) {
-    const String targetUser = 'Client';
     widget.socket.emit('call_invite', {
       'callerName': widget.senderName,
-      'targetUser': targetUser,
       'isVideoCall': isVideo,
     });
 
@@ -115,8 +106,8 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => CallScreen(
-          callerName: targetUser,
-          targetUser: targetUser,
+          callerName: "Client",
+          targetUser: "Client",
           isVideoCall: isVideo,
           isCaller: true,
           socket: widget.socket,
@@ -129,7 +120,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Admin Panel (${widget.senderName})"),
+        title: Text("Admin Panel"),
         actions: [
           IconButton(
             icon: const Icon(Icons.call),
@@ -171,14 +162,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
             padding: const EdgeInsets.all(8.0),
             child: Row(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: const InputDecoration(
-                      hintText: 'Type a message...',
-                    ),
-                  ),
-                ),
+                Expanded(child: TextField(controller: _messageController)),
                 IconButton(
                   icon: const Icon(Icons.send),
                   onPressed: _sendMessage,

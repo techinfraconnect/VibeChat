@@ -12,23 +12,22 @@ class SocketService {
     if (_isInitialized) return;
 
     socket = IO.io(
-      'https://vibechat-server-vo3f.onrender.com:443',
+      'https://vibechat-server-vo3f.onrender.com',
       IO.OptionBuilder()
           .setTransports(['websocket'])
-          .enableAutoConnect()
-          .enableReconnection()
+          .disableAutoConnect()
           .build(),
     );
 
     socket.connect();
 
     socket.onConnect((_) {
-      print('🟢 Client Socket Connected: ${socket.id} as $username');
-      socket.emit('register_user', username);
+      print('====================================');
+      print('🟢 CLIENT SOCKET CONNECTED SUCCESSFULLY');
+      print('====================================');
     });
 
-    socket.onConnectError((data) => print('❌ Client Connect Error: $data'));
-    socket.onError((data) => print('❌ Client Socket Error: $data'));
+    socket.onConnectError((data) => print('❌ CLIENT SOCKET ERROR: $data'));
 
     _isInitialized = true;
   }
