@@ -11,38 +11,45 @@ const io = new Server(server, {
 io.on('connection', (socket) => {
   console.log(`🟢 User connected: ${socket.id}`);
 
+  // Join a unique room based on username or role
   socket.on('register_user', (username) => {
     socket.data.username = username;
-    console.log(`👤 User registered: ${username} (${socket.id})`);
+    socket.join(username);
+    console.log(`👤 User registered and joined room: ${username} (${socket.id})`);
   });
 
   socket.on('send_message', (data) => {
     io.emit('receive_message', data);
   });
 
-  // Call Handshake
+  // Call Handshake (Targeted to specific user or broadcasted reliably)
   socket.on('call_invite', (data) => {
-    console.log(`🔔 Call invite from ${data.callerName}`);
-    // Broadcast to everyone EXCEPT the sender
-    socket.broadcast.emit('incoming_call', data);
+    console.log(`🔔 Call invite received from ${data.callerName} targeting ${data.targetUser}`);
+    if (data.targetUser) {
+      io.to(data.targetUser).emit('incoming_call', data);
+    } else {
+      socket.broadcast.emit('incoming_call', data);
+    }
   });
 
   socket.on('call_accepted', (data) => {
-    console.log('✅ Call accepted');
+    console.log('✅ Call accepted by target');
     socket.broadcast.emit('call_ready_for_offer', data);
   });
 
-  socket.on('call_rejected', () => {
+  socket.on('call_rejected', (data) => {
     console.log('❌ Call rejected');
-    socket.broadcast.emit('call_rejected');
+    socket.broadcast.emit('call_rejected', data);
   });
 
-  // WebRTC Signaling
+  // WebRTC Signaling Relays
   socket.on('offer', (data) => {
+    console.log('📦 Relaying WebRTC Offer');
     socket.broadcast.emit('offer', data);
   });
 
   socket.on('answer', (data) => {
+    console.log('📦 Relaying WebRTC Answer');
     socket.broadcast.emit('answer', data);
   });
 
@@ -51,6 +58,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('end-call', () => {
+    console.log('📴 Call ended');
     socket.broadcast.emit('end-call');
   });
 

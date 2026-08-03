@@ -39,6 +39,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
+      // Ignore if we are the ones who sent it
       if (data['callerName'] == widget.senderName) return;
       _showIncomingCallDialog(data);
     });
@@ -57,19 +58,24 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
-              widget.socket.emit('call_rejected');
+              widget.socket.emit('call_rejected', {
+                'targetUser': data['callerName'],
+              });
             },
             child: const Text("Decline", style: TextStyle(color: Colors.red)),
           ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              widget.socket.emit('call_accepted');
+              widget.socket.emit('call_accepted', {
+                'targetUser': data['callerName'],
+              });
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => CallScreen(
                     callerName: data['callerName'] ?? 'Client',
+                    targetUser: data['callerName'] ?? 'Client',
                     isVideoCall: data['isVideoCall'] ?? false,
                     isCaller: false,
                     socket: widget.socket,
@@ -96,8 +102,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   }
 
   void _initiateCall(bool isVideo) {
+    const String targetUser = 'Client'; // Admin calls Client
+
     widget.socket.emit('call_invite', {
       'callerName': widget.senderName,
+      'targetUser': targetUser,
       'isVideoCall': isVideo,
     });
 
@@ -105,7 +114,8 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => CallScreen(
-          callerName: "Client",
+          callerName: targetUser,
+          targetUser: targetUser,
           isVideoCall: isVideo,
           isCaller: true,
           socket: widget.socket,
