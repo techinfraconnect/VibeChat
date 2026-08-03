@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
 import 'call_screen.dart';
 
 class AdminChatScreen extends StatefulWidget {

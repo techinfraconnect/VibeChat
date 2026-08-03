@@ -11,33 +11,32 @@ class SocketService {
   void initSocket(String username) {
     if (_isInitialized) return;
 
+    // The Fix: Use OptionBuilder to explicitly set the transport and connection parameters.
     socket = IO.io(
-      'https://vibechat-server-vo3f.onrender.com',
-      <String, dynamic>{
-        'transports': ['websocket', 'polling'],
-        'autoConnect': true,
-        'reconnection': true,
-        'reconnectionAttempts': 10,
-        'reconnectionDelay': 1000,
-      },
+      'https://vibechat-server-vo3f.onrender.com:443', // Explicitly add :443 to bypass the port 0 bug
+      IO.OptionBuilder()
+          .setTransports(['websocket']) // Required for Flutter
+          .enableAutoConnect()
+          .enableReconnection()
+          .setReconnectionAttempts(10)
+          .setReconnectionDelay(1000)
+          .build(),
     );
 
     socket.connect();
 
     socket.onConnect((_) {
-      print('🟢 Admin Socket Connected: ${socket.id} as $username');
+      print('🟢 Socket Connected: ${socket.id} as $username');
       socket.emit('register_user', username);
     });
 
     socket.onReconnect((_) {
-      print('🔄 Admin Socket Reconnected as $username');
+      print('🔄 Socket Reconnected as $username');
       socket.emit('register_user', username);
     });
 
-    socket.onConnectError(
-      (data) => print('❌ Admin Socket Connect Error: $data'),
-    );
-    socket.onError((data) => print('❌ Admin Socket Error: $data'));
+    socket.onConnectError((data) => print('❌ Socket Connect Error: $data'));
+    socket.onError((data) => print('❌ Socket Error: $data'));
 
     _isInitialized = true;
   }
