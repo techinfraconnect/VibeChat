@@ -33,22 +33,18 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
-    _initRenderersAndCall();
+    _initCallFlow();
   }
 
-  Future<void> _initRenderersAndCall() async {
+  Future<void> _initCallFlow() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
     await _setupPeerConnection();
 
     _setupSocketListeners();
 
-    if (widget.isCaller) {
-      // Small delay to ensure listener registration is active on receiver side
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _createAndSendOffer();
-      });
-    } else {
+    if (!widget.isCaller) {
+      // Receiver emits acceptance signal to trigger caller's offer
       widget.socket.emit('call_accepted', {'targetUser': widget.targetUser});
     }
   }
@@ -57,7 +53,13 @@ class _CallScreenState extends State<CallScreen> {
     try {
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
-        'video': widget.isVideoCall,
+        'video': widget.isVideoCall
+            ? {
+                'facingMode': 'user',
+                'width': {'ideal': 640},
+                'height': {'ideal': 480},
+              }
+            : false,
       });
 
       if (widget.isVideoCall) {
@@ -66,8 +68,12 @@ class _CallScreenState extends State<CallScreen> {
 
       _peerConnection = await createPeerConnection({
         'iceServers': [
-          {'urls': 'stun:stun.l.google.com:19302'},
-          {'urls': 'stun:stun1.l.google.com:19302'},
+          {
+            'urls': [
+              'stun:stun.l.google.com:19302',
+              'stun:stun1.l.google.com:19302',
+            ],
+          },
         ],
       });
 
@@ -91,6 +97,14 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _setupSocketListeners() {
+    widget.socket.off('call_ready_for_offer');
+    widget.socket.off('offer');
+    widget.socket.off('answer');
+    widget.socket.off('ice-candidate');
+    widget.socket.off('call_rejected');
+    widget.socket.off('end-call');
+
+    // Triggered on Caller when Receiver clicks Accept
     widget.socket.on('call_ready_for_offer', (_) async {
       if (widget.isCaller) {
         await _createAndSendOffer();
@@ -108,7 +122,7 @@ class _CallScreenState extends State<CallScreen> {
 
         widget.socket.emit('answer', answer.toMap());
       } catch (e) {
-        print('❌ Error handling offer: $e');
+        print('❌ Offer Handling Error: $e');
       }
     });
 
@@ -119,7 +133,7 @@ class _CallScreenState extends State<CallScreen> {
         await _peerConnection?.setRemoteDescription(answer);
         if (mounted) setState(() => _isConnected = true);
       } catch (e) {
-        print('❌ Error handling answer: $e');
+        print('❌ Answer Handling Error: $e');
       }
     });
 
@@ -133,8 +147,17 @@ class _CallScreenState extends State<CallScreen> {
           );
           await _peerConnection?.addCandidate(candidate);
         } catch (e) {
-          print('❌ Error adding ICE candidate: $e');
+          print('❌ ICE Candidate Error: $e');
         }
+      }
+    });
+
+    widget.socket.on('call_rejected', (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Call declined by user.')));
+        _cleanUpAndExit();
       }
     });
 
@@ -150,7 +173,7 @@ class _CallScreenState extends State<CallScreen> {
       await _peerConnection!.setLocalDescription(offer);
       widget.socket.emit('offer', offer.toMap());
     } catch (e) {
-      print('❌ Error creating offer: $e');
+      print('❌ Offer Creation Error: $e');
     }
   }
 
@@ -160,6 +183,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _cleanUpAndExit() {
+    _localStream?.getTracks().forEach((t) => t.stop());
     _localStream?.dispose();
     _peerConnection?.dispose();
     _localRenderer.dispose();
@@ -169,10 +193,11 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    widget.socket.off('call_ready_for_offer');
     widget.socket.off('offer');
     widget.socket.off('answer');
     widget.socket.off('ice-candidate');
-    widget.socket.off('call_ready_for_offer');
+    widget.socket.off('call_rejected');
     widget.socket.off('end-call');
     super.dispose();
   }
@@ -196,15 +221,15 @@ class _CallScreenState extends State<CallScreen> {
                 top: 20,
                 right: 20,
                 child: Container(
-                  width: 100,
-                  height: 150,
+                  width: 110,
+                  height: 160,
                   decoration: BoxDecoration(
                     color: Colors.grey[900],
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: Colors.white, width: 2),
                   ),
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(10),
                     child: RTCVideoView(
                       _localRenderer,
                       mirror: true,
@@ -227,9 +252,13 @@ class _CallScreenState extends State<CallScreen> {
                     const SizedBox(height: 20),
                     Text(
                       _isConnected
-                          ? "Connected with ${widget.callerName}"
+                          ? "In Call with ${widget.callerName}"
                           : "Calling ${widget.callerName}...",
-                      style: const TextStyle(color: Colors.white, fontSize: 20),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ],
                 ),
@@ -245,7 +274,7 @@ class _CallScreenState extends State<CallScreen> {
                   child: const Icon(
                     Icons.call_end,
                     color: Colors.white,
-                    size: 30,
+                    size: 32,
                   ),
                 ),
               ),

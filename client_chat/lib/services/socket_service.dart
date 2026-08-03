@@ -14,10 +14,10 @@ class SocketService {
     socket = IO.io(
       'https://vibechat-server-vo3f.onrender.com',
       <String, dynamic>{
-        'transports': ['websocket'],
+        'transports': ['websocket', 'polling'],
         'autoConnect': true,
         'reconnection': true,
-        'reconnectionAttempts': 5,
+        'reconnectionAttempts': 10,
         'reconnectionDelay': 1000,
       },
     );
@@ -25,17 +25,19 @@ class SocketService {
     socket.connect();
 
     socket.onConnect((_) {
-      print('🟢 Connected to global server: ${socket.id} as $username');
+      print('🟢 Client Socket Connected: ${socket.id} as $username');
       socket.emit('register_user', username);
     });
 
     socket.onReconnect((_) {
-      print('🔄 Reconnected to global server as $username');
+      print('🔄 Client Socket Reconnected as $username');
       socket.emit('register_user', username);
     });
 
-    socket.onConnectError((data) => print('❌ Connect Error: $data'));
-    socket.onError((data) => print('❌ Socket Error: $data'));
+    socket.onConnectError(
+      (data) => print('❌ Client Socket Connect Error: $data'),
+    );
+    socket.onError((data) => print('❌ Client Socket Error: $data'));
 
     _isInitialized = true;
   }

@@ -39,9 +39,12 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      // Ignore if we are the ones who sent it
-      if (data['callerName'] == widget.senderName) return;
-      _showIncomingCallDialog(data);
+      // Do not trigger popup if this app initiated the call
+      if (data['callerName']?.toString().toLowerCase() ==
+          widget.senderName.toLowerCase()) {
+        return;
+      }
+      _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }
 
@@ -68,6 +71,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               widget.socket.emit('call_accepted', {
+                'callerName': widget.senderName,
                 'targetUser': data['callerName'],
               });
               Navigator.push(

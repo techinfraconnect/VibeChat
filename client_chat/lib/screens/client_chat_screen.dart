@@ -39,8 +39,12 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      if (data['callerName'] == widget.senderName) return;
-      _showIncomingCallDialog(data);
+      // Do not trigger popup if this app initiated the call
+      if (data['callerName']?.toString().toLowerCase() ==
+          widget.senderName.toLowerCase()) {
+        return;
+      }
+      _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }
 
@@ -67,6 +71,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               widget.socket.emit('call_accepted', {
+                'callerName': widget.senderName,
                 'targetUser': data['callerName'],
               });
               Navigator.push(
