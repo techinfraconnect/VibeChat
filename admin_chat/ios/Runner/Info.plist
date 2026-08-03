@@ -28,9 +28,9 @@
     <true/>
     
     <key>NSCameraUsageDescription</key>
-    <string>VibeChat requires camera access to enable video calls with participants.</string>
+    <string>We need camera access for video calls.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>VibeChat requires microphone access to enable crystal-clear audio during calls.</string>
+    <string>We need microphone access for audio calls.</string>
     
     <!-- APPLE LOCAL NETWORK SECURITY FIX (REQUIRED FOR WEBRTC) -->
     <key>NSLocalNetworkUsageDescription</key>
