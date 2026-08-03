@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'screens/client_chat_screen.dart';
+import 'services/socket_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // Initialize WebSocket connection and register as Client
+  SocketService().initSocket('Client');
+
   runApp(const ClientChatApp());
 }
 
@@ -15,9 +20,12 @@ class ClientChatApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Client Chat',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue),
-      // FIX: Changed from ClientChatScreen() to ChatScreen()
-      home: const ChatScreen(),
+      home: ClientChatScreen(
+        senderName: 'Client',
+        socket: SocketService().socket,
+      ),
     );
   }
 }
