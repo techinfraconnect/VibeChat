@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'call_screen.dart';
 
 class AdminChatScreen extends StatefulWidget {
@@ -39,11 +39,9 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      // Do not trigger popup if this app initiated the call
       if (data['callerName']?.toString().toLowerCase() ==
-          widget.senderName.toLowerCase()) {
+          widget.senderName.toLowerCase())
         return;
-      }
       _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }
@@ -106,8 +104,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   }
 
   void _initiateCall(bool isVideo) {
-    const String targetUser = 'Client'; // Admin calls Client
-
+    const String targetUser = 'Client';
     widget.socket.emit('call_invite', {
       'callerName': widget.senderName,
       'targetUser': targetUser,

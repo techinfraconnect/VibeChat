@@ -43,8 +43,8 @@ class _CallScreenState extends State<CallScreen> {
 
     _setupSocketListeners();
 
+    // If this device is the receiver, tell the caller we are ready for the offer
     if (!widget.isCaller) {
-      // Receiver emits acceptance signal to trigger caller's offer
       widget.socket.emit('call_accepted', {'targetUser': widget.targetUser});
     }
   }
@@ -54,11 +54,7 @@ class _CallScreenState extends State<CallScreen> {
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
         'video': widget.isVideoCall
-            ? {
-                'facingMode': 'user',
-                'width': {'ideal': 640},
-                'height': {'ideal': 480},
-              }
+            ? {'facingMode': 'user', 'width': 640, 'height': 480}
             : false,
       });
 
@@ -84,7 +80,9 @@ class _CallScreenState extends State<CallScreen> {
       _peerConnection?.onTrack = (event) {
         if (event.streams.isNotEmpty) {
           _remoteRenderer.srcObject = event.streams[0];
-          if (mounted) setState(() => _isConnected = true);
+          if (mounted) {
+            setState(() => _isConnected = true);
+          }
         }
       };
 
@@ -97,6 +95,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _setupSocketListeners() {
+    // Clear old listeners to prevent duplicates
     widget.socket.off('call_ready_for_offer');
     widget.socket.off('offer');
     widget.socket.off('answer');
@@ -104,7 +103,7 @@ class _CallScreenState extends State<CallScreen> {
     widget.socket.off('call_rejected');
     widget.socket.off('end-call');
 
-    // Triggered on Caller when Receiver clicks Accept
+    // Caller receives this when receiver accepts the call
     widget.socket.on('call_ready_for_offer', (_) async {
       if (widget.isCaller) {
         await _createAndSendOffer();
@@ -112,7 +111,7 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     widget.socket.on('offer', (data) async {
-      if (widget.isCaller) return;
+      if (widget.isCaller) return; // Caller shouldn't process offers
       try {
         var offer = RTCSessionDescription(data['sdp'], data['type']);
         await _peerConnection?.setRemoteDescription(offer);
@@ -122,30 +121,33 @@ class _CallScreenState extends State<CallScreen> {
 
         widget.socket.emit('answer', answer.toMap());
       } catch (e) {
-        print('❌ Offer Handling Error: $e');
+        print('❌ Offer Error: $e');
       }
     });
 
     widget.socket.on('answer', (data) async {
-      if (!widget.isCaller) return;
+      if (!widget.isCaller) return; // Receiver shouldn't process answers
       try {
         var answer = RTCSessionDescription(data['sdp'], data['type']);
         await _peerConnection?.setRemoteDescription(answer);
-        if (mounted) setState(() => _isConnected = true);
+        if (mounted) {
+          setState(() => _isConnected = true);
+        }
       } catch (e) {
-        print('❌ Answer Handling Error: $e');
+        print('❌ Answer Error: $e');
       }
     });
 
     widget.socket.on('ice-candidate', (data) async {
       if (data != null && _peerConnection != null) {
         try {
-          var candidate = RTCIceCandidate(
-            data['candidate'],
-            data['sdpMid'],
-            data['sdpMLineIndex'],
+          await _peerConnection?.addCandidate(
+            RTCIceCandidate(
+              data['candidate'],
+              data['sdpMid'],
+              data['sdpMLineIndex'],
+            ),
           );
-          await _peerConnection?.addCandidate(candidate);
         } catch (e) {
           print('❌ ICE Candidate Error: $e');
         }
@@ -156,7 +158,7 @@ class _CallScreenState extends State<CallScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Call declined by user.')));
+        ).showSnackBar(const SnackBar(content: Text('Call declined.')));
         _cleanUpAndExit();
       }
     });
@@ -188,7 +190,9 @@ class _CallScreenState extends State<CallScreen> {
     _peerConnection?.dispose();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
-    if (mounted) Navigator.pop(context);
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -209,6 +213,7 @@ class _CallScreenState extends State<CallScreen> {
       body: SafeArea(
         child: Stack(
           children: [
+            // Remote Video (Full Screen)
             if (widget.isVideoCall)
               Positioned.fill(
                 child: RTCVideoView(
@@ -216,6 +221,8 @@ class _CallScreenState extends State<CallScreen> {
                   objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                 ),
               ),
+
+            // Local Video (Small picture-in-picture)
             if (widget.isVideoCall)
               Positioned(
                 top: 20,
@@ -239,6 +246,8 @@ class _CallScreenState extends State<CallScreen> {
                   ),
                 ),
               ),
+
+            // Audio Call or Connecting State UI
             if (!widget.isVideoCall || !_isConnected)
               Center(
                 child: Column(
@@ -254,15 +263,13 @@ class _CallScreenState extends State<CallScreen> {
                       _isConnected
                           ? "In Call with ${widget.callerName}"
                           : "Calling ${widget.callerName}...",
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: const TextStyle(color: Colors.white, fontSize: 22),
                     ),
                   ],
                 ),
               ),
+
+            // End Call Button
             Positioned(
               bottom: 40,
               left: 0,

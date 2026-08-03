@@ -39,11 +39,9 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      // Do not trigger popup if this app initiated the call
       if (data['callerName']?.toString().toLowerCase() ==
-          widget.senderName.toLowerCase()) {
+          widget.senderName.toLowerCase())
         return;
-      }
       _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }
@@ -106,8 +104,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   }
 
   void _initiateCall(bool isVideo) {
-    const String targetUser = 'Admin'; // Client calls Admin
-
+    const String targetUser = 'Admin';
     widget.socket.emit('call_invite', {
       'callerName': widget.senderName,
       'targetUser': targetUser,
