@@ -49,7 +49,6 @@ class _CallScreenState extends State<CallScreen> {
     _localStream?.dispose();
     _peerConnection?.dispose();
 
-    // Clean up socket listeners matching server.js event names
     widget.socket.off('offer');
     widget.socket.off('answer');
     widget.socket.off('ice-candidate');
@@ -59,16 +58,14 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _setupSocketListeners() {
-    // 1. Triggered when receiver accepts the call and is ready to establish WebRTC connection
     widget.socket.on('call_ready_for_offer', (_) async {
       if (widget.isCaller) {
         await _createAndSendOffer();
       }
     });
 
-    // 2. Listen for incoming offers (Receiver side)
     widget.socket.on('offer', (data) async {
-      if (widget.isCaller) return; // Caller ignores offers
+      if (widget.isCaller) return;
 
       var offer = RTCSessionDescription(data['sdp'], data['type']);
       await _peerConnection?.setRemoteDescription(offer);
@@ -76,13 +73,11 @@ class _CallScreenState extends State<CallScreen> {
       RTCSessionDescription answer = await _peerConnection!.createAnswer();
       await _peerConnection!.setLocalDescription(answer);
 
-      // Matches server.js socket.on('answer')
       widget.socket.emit('answer', answer.toMap());
     });
 
-    // 3. Listen for incoming answers (Caller side)
     widget.socket.on('answer', (data) async {
-      if (!widget.isCaller) return; // Receiver ignores answers
+      if (!widget.isCaller) return;
 
       var answer = RTCSessionDescription(data['sdp'], data['type']);
       await _peerConnection?.setRemoteDescription(answer);
@@ -91,17 +86,17 @@ class _CallScreenState extends State<CallScreen> {
       }
     });
 
-    // 4. Listen for ICE candidates
     widget.socket.on('ice-candidate', (data) async {
-      var candidate = RTCIceCandidate(
-        data['candidate'],
-        data['sdpMid'],
-        data['sdpMLineIndex'],
-      );
-      await _peerConnection?.addCandidate(candidate);
+      if (data != null) {
+        var candidate = RTCIceCandidate(
+          data['candidate'],
+          data['sdpMid'],
+          data['sdpMLineIndex'],
+        );
+        await _peerConnection?.addCandidate(candidate);
+      }
     });
 
-    // 5. Listen for hangup signals from the other party
     widget.socket.on('end-call', (_) {
       if (mounted) {
         Navigator.pop(context);
@@ -111,8 +106,6 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _startCall() async {
     await _setupPeerConnection();
-
-    // If caller, send an offer immediately if call was already accepted
     if (widget.isCaller) {
       await _createAndSendOffer();
     }
@@ -122,13 +115,10 @@ class _CallScreenState extends State<CallScreen> {
     if (_peerConnection == null) return;
     RTCSessionDescription offer = await _peerConnection!.createOffer();
     await _peerConnection!.setLocalDescription(offer);
-
-    // Matches server.js socket.on('offer')
     widget.socket.emit('offer', offer.toMap());
   }
 
   Future<void> _setupPeerConnection() async {
-    // 1. Get Media (Audio or Audio+Video)
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': widget.isVideoCall,
@@ -138,21 +128,18 @@ class _CallScreenState extends State<CallScreen> {
       _localRenderer.srcObject = _localStream;
     }
 
-    // 2. Setup Peer Connection with public STUN server
     _peerConnection = await createPeerConnection({
       'iceServers': [
         {'urls': 'stun:stun.l.google.com:19302'},
       ],
     });
 
-    // 3. Add tracks
     _localStream?.getTracks().forEach((track) {
       _peerConnection?.addTrack(track, _localStream!);
     });
 
-    // 4. Listen for remote stream
     _peerConnection?.onTrack = (event) {
-      if (event.track.kind == 'video' && event.streams.isNotEmpty) {
+      if (event.streams.isNotEmpty) {
         _remoteRenderer.srcObject = event.streams[0];
         if (mounted) {
           setState(() => _isConnected = true);
@@ -160,7 +147,6 @@ class _CallScreenState extends State<CallScreen> {
       }
     };
 
-    // 5. Automatically send ICE candidates matching server.js socket.on('ice-candidate')
     _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
       widget.socket.emit('ice-candidate', candidate.toMap());
     };
@@ -182,7 +168,6 @@ class _CallScreenState extends State<CallScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // Remote Video (Background)
             if (widget.isVideoCall)
               Positioned.fill(
                 child: RTCVideoView(
@@ -190,8 +175,6 @@ class _CallScreenState extends State<CallScreen> {
                   objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                 ),
               ),
-
-            // Local Video (Top Right Corner)
             if (widget.isVideoCall)
               Positioned(
                 top: 20,
@@ -215,8 +198,6 @@ class _CallScreenState extends State<CallScreen> {
                   ),
                 ),
               ),
-
-            // Audio-Only UI
             if (!widget.isVideoCall)
               Center(
                 child: Column(
@@ -233,8 +214,6 @@ class _CallScreenState extends State<CallScreen> {
                   ],
                 ),
               ),
-
-            // End Call Button
             Positioned(
               bottom: 40,
               left: 0,

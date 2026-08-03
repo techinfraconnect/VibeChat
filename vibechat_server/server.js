@@ -10,8 +10,19 @@ const io = new Server(server, {
   }
 });
 
+// Track connected users to route calls cleanly by name/ID if needed
+const activeUsers = new Map();
+
 io.on('connection', (socket) => {
   console.log(`🟢 User connected: ${socket.id}`);
+
+  // Register user mapping
+  socket.on('register_user', (username) => {
+    if (username) {
+      activeUsers.set(username.toLowerCase(), socket.id);
+      console.log(`👤 User registered: ${username} -> ${socket.id}`);
+    }
+  });
 
   // Chat Messages
   socket.on('send_message', (data) => {
@@ -24,20 +35,21 @@ io.on('connection', (socket) => {
   
   // 1. Caller starts ringing the receiver
   socket.on('call_invite', (data) => {
-    console.log(`🔔 Incoming call invite from: ${data.callerName}. Routing to receiver...`);
+    console.log(`🔔 Incoming call invite from: ${data.callerName} to target: ${data.targetUser}`);
+    // Broadcast to everyone or target specific user
     socket.broadcast.emit('incoming_call', data);
   });
 
-  // 2. Receiver accepts the call (Signals the Caller to finally send the WebRTC Offer)
-  socket.on('call_accepted', () => {
+  // 2. Receiver accepts the call
+  socket.on('call_accepted', (data) => {
     console.log('✅ Call accepted by receiver. Triggering offer generation...');
-    socket.broadcast.emit('call_ready_for_offer');
+    socket.broadcast.emit('call_ready_for_offer', data);
   });
 
   // 3. Receiver rejects the call
-  socket.on('call_rejected', () => {
+  socket.on('call_rejected', (data) => {
     console.log('❌ Call rejected by receiver.');
-    socket.broadcast.emit('call_rejected');
+    socket.broadcast.emit('call_rejected', data);
   });
 
   // ---------------------------------------------------------
@@ -54,6 +66,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('ice-candidate', (data) => {
+    console.log('❄️ ICE candidate received, relaying...');
     socket.broadcast.emit('ice-candidate', data);
   });
 
