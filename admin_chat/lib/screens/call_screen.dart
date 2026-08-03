@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -7,7 +6,7 @@ class CallScreen extends StatefulWidget {
   final String callerName;
   final bool isVideoCall;
   final bool isCaller;
-  final IO.Socket socket; // Kept to ensure your app navigation doesn't break
+  final IO.Socket socket;
 
   const CallScreen({
     super.key,
@@ -27,13 +26,15 @@ class _CallScreenState extends State<CallScreen> {
 
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
-
-  final TextEditingController _textController = TextEditingController();
+  bool _isConnected = false;
 
   @override
   void initState() {
     super.initState();
-    _initRenderers();
+    _initRenderers().then((_) {
+      _setupSocketListeners();
+      _startCall();
+    });
   }
 
   Future<void> _initRenderers() async {
@@ -47,167 +48,211 @@ class _CallScreenState extends State<CallScreen> {
     _remoteRenderer.dispose();
     _localStream?.dispose();
     _peerConnection?.dispose();
-    _textController.dispose();
+
+    // Clean up socket listeners matching server.js event names
+    widget.socket.off('offer');
+    widget.socket.off('answer');
+    widget.socket.off('ice-candidate');
+    widget.socket.off('call_ready_for_offer');
+    widget.socket.off('end-call');
     super.dispose();
   }
 
+  void _setupSocketListeners() {
+    // 1. Triggered when receiver accepts the call and is ready to establish WebRTC connection
+    widget.socket.on('call_ready_for_offer', (_) async {
+      if (widget.isCaller) {
+        await _createAndSendOffer();
+      }
+    });
+
+    // 2. Listen for incoming offers (Receiver side)
+    widget.socket.on('offer', (data) async {
+      if (widget.isCaller) return; // Caller ignores offers
+
+      var offer = RTCSessionDescription(data['sdp'], data['type']);
+      await _peerConnection?.setRemoteDescription(offer);
+
+      RTCSessionDescription answer = await _peerConnection!.createAnswer();
+      await _peerConnection!.setLocalDescription(answer);
+
+      // Matches server.js socket.on('answer')
+      widget.socket.emit('answer', answer.toMap());
+    });
+
+    // 3. Listen for incoming answers (Caller side)
+    widget.socket.on('answer', (data) async {
+      if (!widget.isCaller) return; // Receiver ignores answers
+
+      var answer = RTCSessionDescription(data['sdp'], data['type']);
+      await _peerConnection?.setRemoteDescription(answer);
+      if (mounted) {
+        setState(() => _isConnected = true);
+      }
+    });
+
+    // 4. Listen for ICE candidates
+    widget.socket.on('ice-candidate', (data) async {
+      var candidate = RTCIceCandidate(
+        data['candidate'],
+        data['sdpMid'],
+        data['sdpMLineIndex'],
+      );
+      await _peerConnection?.addCandidate(candidate);
+    });
+
+    // 5. Listen for hangup signals from the other party
+    widget.socket.on('end-call', (_) {
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    });
+  }
+
+  Future<void> _startCall() async {
+    await _setupPeerConnection();
+
+    // If caller, send an offer immediately if call was already accepted
+    if (widget.isCaller) {
+      await _createAndSendOffer();
+    }
+  }
+
+  Future<void> _createAndSendOffer() async {
+    if (_peerConnection == null) return;
+    RTCSessionDescription offer = await _peerConnection!.createOffer();
+    await _peerConnection!.setLocalDescription(offer);
+
+    // Matches server.js socket.on('offer')
+    widget.socket.emit('offer', offer.toMap());
+  }
+
   Future<void> _setupPeerConnection() async {
-    // 1. Get access to camera and microphone
+    // 1. Get Media (Audio or Audio+Video)
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': widget.isVideoCall,
     });
 
-    _localRenderer.srcObject = _localStream;
+    if (widget.isVideoCall) {
+      _localRenderer.srcObject = _localStream;
+    }
 
-    // 2. Create the Peer Connection using Google's public STUN server
+    // 2. Setup Peer Connection with public STUN server
     _peerConnection = await createPeerConnection({
       'iceServers': [
         {'urls': 'stun:stun.l.google.com:19302'},
       ],
     });
 
-    // 3. Add our local camera stream to the connection
+    // 3. Add tracks
     _localStream?.getTracks().forEach((track) {
       _peerConnection?.addTrack(track, _localStream!);
     });
 
-    // 4. Listen for the other person's stream
+    // 4. Listen for remote stream
     _peerConnection?.onTrack = (event) {
       if (event.track.kind == 'video' && event.streams.isNotEmpty) {
         _remoteRenderer.srcObject = event.streams[0];
-        setState(() {}); // Refresh UI to show their video
+        if (mounted) {
+          setState(() => _isConnected = true);
+        }
       }
     };
 
-    setState(() {});
+    // 5. Automatically send ICE candidates matching server.js socket.on('ice-candidate')
+    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+      widget.socket.emit('ice-candidate', candidate.toMap());
+    };
+
+    if (mounted) {
+      setState(() {});
+    }
   }
 
-  Future<void> _createOffer() async {
-    await _setupPeerConnection();
-
-    RTCSessionDescription offer = await _peerConnection!.createOffer();
-    await _peerConnection!.setLocalDescription(offer);
-
-    // Output the connection string for you to copy
-    _textController.text = jsonEncode(offer.toMap());
-  }
-
-  Future<void> _setOfferAndCreateAnswer() async {
-    await _setupPeerConnection();
-
-    // Read the offer string pasted by the user
-    var offerMap = jsonDecode(_textController.text);
-    RTCSessionDescription offer = RTCSessionDescription(
-      offerMap['sdp'],
-      offerMap['type'],
-    );
-
-    await _peerConnection!.setRemoteDescription(offer);
-
-    RTCSessionDescription answer = await _peerConnection!.createAnswer();
-    await _peerConnection!.setLocalDescription(answer);
-
-    // Output the answer string for you to copy back
-    _textController.text = jsonEncode(answer.toMap());
-  }
-
-  Future<void> _setAnswer() async {
-    // Read the answer string pasted by the user
-    var answerMap = jsonDecode(_textController.text);
-    RTCSessionDescription answer = RTCSessionDescription(
-      answerMap['sdp'],
-      answerMap['type'],
-    );
-
-    await _peerConnection!.setRemoteDescription(answer);
+  void _endCall() {
+    widget.socket.emit('end-call');
+    Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
-      appBar: AppBar(
-        title: const Text(
-          "WebRTC Local Test",
-          style: TextStyle(color: Colors.white),
-        ),
-        backgroundColor: Colors.black,
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Column(
-        children: [
-          // Video Boxes
-          Expanded(
-            child: Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey),
-                    ),
-                    child: RTCVideoView(_localRenderer, mirror: true),
-                  ),
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Remote Video (Background)
+            if (widget.isVideoCall)
+              Positioned.fill(
+                child: RTCVideoView(
+                  _remoteRenderer,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                 ),
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.blue),
-                    ),
-                    child: RTCVideoView(_remoteRenderer),
-                  ),
-                ),
-              ],
-            ),
-          ),
+              ),
 
-          // Connection String Text Box
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: TextField(
-              controller: _textController,
-              maxLines: 4,
-              style: const TextStyle(color: Colors.white, fontSize: 10),
-              decoration: const InputDecoration(
-                hintText: "Copy/Paste SDP string here...",
-                hintStyle: TextStyle(color: Colors.white54),
-                filled: true,
-                fillColor: Colors.black54,
-                border: OutlineInputBorder(),
+            // Local Video (Top Right Corner)
+            if (widget.isVideoCall)
+              Positioned(
+                top: 20,
+                right: 20,
+                child: Container(
+                  width: 100,
+                  height: 150,
+                  decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: RTCVideoView(
+                      _localRenderer,
+                      mirror: true,
+                      objectFit:
+                          RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                    ),
+                  ),
+                ),
+              ),
+
+            // Audio-Only UI
+            if (!widget.isVideoCall)
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.person, size: 100, color: Colors.white54),
+                    const SizedBox(height: 20),
+                    Text(
+                      _isConnected
+                          ? "Connected to ${widget.callerName}"
+                          : "Calling ${widget.callerName}...",
+                      style: const TextStyle(color: Colors.white, fontSize: 20),
+                    ),
+                  ],
+                ),
+              ),
+
+            // End Call Button
+            Positioned(
+              bottom: 40,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: FloatingActionButton(
+                  backgroundColor: Colors.red,
+                  onPressed: _endCall,
+                  child: const Icon(
+                    Icons.call_end,
+                    color: Colors.white,
+                    size: 30,
+                  ),
+                ),
               ),
             ),
-          ),
-
-          // Manual Signaling Buttons
-          Padding(
-            padding: const EdgeInsets.only(bottom: 20.0),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              alignment: WrapAlignment.center,
-              children: [
-                ElevatedButton(
-                  onPressed: _createOffer,
-                  child: const Text("1. Create Offer"),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                  ),
-                  onPressed: _setOfferAndCreateAnswer,
-                  child: const Text("2. Paste Offer & Create Answer"),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                  ),
-                  onPressed: _setAnswer,
-                  child: const Text("3. Paste Answer & Connect"),
-                ),
-              ],
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
