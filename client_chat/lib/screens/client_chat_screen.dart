@@ -50,7 +50,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'https://vibechat-server-vo3f.onrender.com',
       <String, dynamic>{
         'transports': ['websocket'],
-        'autoConnect': false,
+        'autoConnect': true,
       },
     );
 
