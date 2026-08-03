@@ -27,7 +27,9 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   }
 
   void _setupSocketListeners() {
-    // Listen for incoming messages
+    widget.socket.off('receive_message');
+    widget.socket.off('incoming_call');
+
     widget.socket.on('receive_message', (data) {
       if (!mounted) return;
       setState(() {
@@ -35,9 +37,10 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       });
     });
 
-    // Listen for incoming call invites
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
+      // Prevent picking up own call invite if echoes occur
+      if (data['callerName'] == widget.senderName) return;
       _showIncomingCallDialog(data);
     });
   }
@@ -46,7 +49,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: Text("Incoming Call from ${data['callerName'] ?? 'Admin'}"),
         content: Text(
           "Type: ${data['isVideoCall'] == true ? 'Video Call' : 'Audio Call'}",
@@ -54,14 +57,14 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         actions: [
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              Navigator.pop(ctx);
               widget.socket.emit('call_rejected');
             },
             child: const Text("Decline", style: TextStyle(color: Colors.red)),
           ),
           ElevatedButton(
             onPressed: () {
-              Navigator.pop(context);
+              Navigator.pop(ctx);
               widget.socket.emit('call_accepted');
               Navigator.push(
                 context,
@@ -113,14 +116,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   }
 
   @override
-  void dispose() {
-    widget.socket.off('receive_message');
-    widget.socket.off('incoming_call');
-    _messageController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -143,7 +138,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
-                final isMe = msg['sender'] == widget.senderName;
+                bool isMe = msg['sender'] == widget.senderName;
                 return ListTile(
                   title: Align(
                     alignment: isMe
