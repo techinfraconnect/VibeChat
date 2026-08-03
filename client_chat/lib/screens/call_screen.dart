@@ -51,7 +51,7 @@ class _CallScreenState extends State<CallScreen> {
       room: "vibechat_secure_room_987654321",
 
       // Using Jitsi's 100% free, unlimited public server
-      serverURL: "https://meet.jit.si",
+      serverURL: "https://meet.ffmuc.net",
 
       configOverrides: {
         "startWithAudioMuted": false,
