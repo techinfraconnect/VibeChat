@@ -1,34 +1,61 @@
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:flutter/material.dart';
+import 'package:socket_io_client/socket_io_client.dart' as io;
+import '../screens/call_screen.dart';
+import '../main.dart';
 
 class SocketService {
   static final SocketService _instance = SocketService._internal();
   factory SocketService() => _instance;
   SocketService._internal();
 
-  late IO.Socket socket;
-  bool _isInitialized = false;
+  late io.Socket socket;
+  late String currentUserId;
 
-  void initSocket(String username) {
-    if (_isInitialized) return;
-
-    socket = IO.io(
-      'https://vibechat-server-vo3f.onrender.com',
-      IO.OptionBuilder()
-          .setTransports(['websocket'])
-          .disableAutoConnect()
-          .build(),
-    );
+  void initSocket(String userId) {
+    currentUserId = userId;
+    socket = io.io('http://192.168.1.15:3000', <String, dynamic>{
+      'transports': ['websocket'],
+      'autoConnect': false,
+    });
 
     socket.connect();
 
     socket.onConnect((_) {
-      print('====================================');
-      print('🟢 CLIENT SOCKET CONNECTED SUCCESSFULLY');
-      print('====================================');
+      debugPrint('Client connected to socket server');
+      socket.emit('register', {'userId': currentUserId});
     });
 
-    socket.onConnectError((data) => print('❌ CLIENT SOCKET ERROR: $data'));
+    socket.on('incoming_call', (data) {
+      debugPrint('Incoming call received in Client App: $data');
 
-    _isInitialized = true;
+      final String caller = data['callerId'] ?? 'Admin';
+      final bool isVideo = data['isVideoCall'] ?? true;
+
+      if (clientNavigatorKey.currentState != null) {
+        clientNavigatorKey.currentState!.push(
+          MaterialPageRoute(
+            builder: (context) => CallScreen(
+              callerName: caller,
+              targetUser: caller,
+              isVideoCall: isVideo,
+              isCaller: false,
+              socket: socket,
+            ),
+          ),
+        );
+      }
+    });
+  }
+
+  void initiateCall(String receiverId, bool isVideoCall) {
+    socket.emit('call_user', {
+      'callerId': currentUserId,
+      'receiverId': receiverId,
+      'isVideoCall': isVideoCall,
+    });
+  }
+
+  void disconnect() {
+    socket.disconnect();
   }
 }

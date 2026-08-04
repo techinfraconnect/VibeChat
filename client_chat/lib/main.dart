@@ -1,33 +1,29 @@
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'firebase_options.dart';
 import 'screens/client_chat_screen.dart';
 import 'services/socket_service.dart';
 
-void main() async {
+final GlobalKey<NavigatorState> clientNavigatorKey =
+    GlobalKey<NavigatorState>();
+
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // Initialize Socket Connection with Client ID
+  SocketService().initSocket('client_123');
 
-  // Initialize WebSocket connection and register username
-  SocketService().initSocket('Client');
-
-  runApp(const MyApp());
+  runApp(const ClientApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class ClientApp extends StatelessWidget {
+  const ClientApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Vibe Chat Client',
+      title: 'VibeChat Client',
+      navigatorKey: clientNavigatorKey,
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
-      ),
+      theme: ThemeData(primarySwatch: Colors.green),
       home: ClientChatScreen(
         senderName: 'Client',
         socket: SocketService().socket,
