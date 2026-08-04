@@ -1,38 +1,48 @@
 workflows:
-  admin-chat-ios-unsigned:
-    name: Admin Chat iOS (Unsigned)
+  admin-chat-ios-app:
+    name: Admin Chat iOS (.app)
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
       flutter: stable
       xcode: latest
+      cocoapods: default
     scripts:
-      - name: Get Flutter Packages
+      - name: Get Flutter dependencies
         script: |
           cd admin_chat
           flutter pub get
-      - name: Build iOS App Unsigned
+      - name: Install Pods
+        script: |
+          cd admin_chat/ios
+          pod install
+      - name: Build iOS .app Bundle
         script: |
           cd admin_chat
-          flutter build ios --release --no-codesign
+          flutter build ios --simulator
     artifacts:
-      - admin_chat/build/ios/iphoneos/*.app
+      - admin_chat/build/ios/iphonesimulator/*.app
 
-  client-chat-ios-unsigned:
-    name: Client Chat iOS (Unsigned)
+  client-chat-ios-app:
+    name: Client Chat iOS (.app)
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
       flutter: stable
       xcode: latest
+      cocoapods: default
     scripts:
-      - name: Get Flutter Packages
+      - name: Get Flutter dependencies
         script: |
           cd client_chat
           flutter pub get
-      - name: Build iOS App Unsigned
+      - name: Install Pods
+        script: |
+          cd client_chat/ios
+          pod install
+      - name: Build iOS .app Bundle
         script: |
           cd client_chat
-          flutter build ios --release --no-codesign
+          flutter build ios --simulator
     artifacts:
-      - client_chat/build/ios/iphoneos/*.app
+      - client_chat/build/ios/iphonesimulator/*.app

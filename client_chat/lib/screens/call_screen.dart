@@ -54,10 +54,7 @@ class _CallScreenState extends State<CallScreen> {
     await _createMediaStream();
     await _createPeerConnection();
 
-    if (widget.isCaller) {
-      // Caller waits for receiver to accept call before emitting Offer
-    } else {
-      // Receiver notifies server call is accepted
+    if (!widget.isCaller) {
       widget.socket.emit('accept_call', {
         'callerId': widget.targetUser,
         'receiverId': 'client_123',
@@ -257,7 +254,8 @@ class _CallScreenState extends State<CallScreen> {
                       )
                     : Center(
                         child: Column(
-                          mainAxisAlignment: Alignment.center,
+                          mainAxisAlignment:
+                              MainAxisAlignment.center, // Fixed here
                           children: [
                             const CircularProgressIndicator(
                               color: Colors.white,
@@ -277,7 +275,7 @@ class _CallScreenState extends State<CallScreen> {
             else
               Center(
                 child: Column(
-                  mainAxisAlignment: Alignment.center,
+                  mainAxisAlignment: MainAxisAlignment.center, // Fixed here
                   children: [
                     const CircleAvatar(
                       radius: 50,
