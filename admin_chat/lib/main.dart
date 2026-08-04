@@ -7,8 +7,7 @@ final GlobalKey<NavigatorState> adminNavigatorKey = GlobalKey<NavigatorState>();
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Socket Connection
-  SocketService().initSocket();
+  SocketService().initSocket('admin', adminNavigatorKey);
 
   runApp(const AdminApp());
 }

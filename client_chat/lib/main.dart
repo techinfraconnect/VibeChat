@@ -8,8 +8,7 @@ final GlobalKey<NavigatorState> clientNavigatorKey =
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Socket Connection with Client ID
-  SocketService().initSocket('client_123');
+  SocketService().initSocket('client_123', clientNavigatorKey);
 
   runApp(const ClientApp());
 }

@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'screens/admin_chat_screen.dart';
 import 'services/socket_service.dart';
-import 'main.dart';
+import 'main.dart'; // Provides adminNavigatorKey and AdminApp
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
 
-  // Initialize WebSocket connection (takes 0 positional arguments in admin_chat)
-  SocketService().initSocket();
+  // Pass BOTH 'admin' ID AND adminNavigatorKey
+  SocketService().initSocket('admin', adminNavigatorKey);
 
   runApp(const AdminApp());
 }
