@@ -1,6 +1,6 @@
 workflows:
-  admin-chat-ios-app:
-    name: Admin Chat iOS (.app)
+  admin-chat-ios-ipa:
+    name: Admin Chat iOS (Unsigned IPA)
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
@@ -16,15 +16,27 @@ workflows:
         script: |
           cd admin_chat/ios
           pod install
-      - name: Build iOS .app Bundle
+      - name: Build Unsigned IPA for Sideloadly
         script: |
           cd admin_chat
-          flutter build ios --simulator
+          
+          # 1. Build for physical iOS device architectures without Apple Developer code signing
+          flutter build ios --release --no-codesign
+          
+          # 2. Create the required Payload directory structure
+          mkdir -p build/Payload
+          
+          # 3. Copy the compiled device Runner.app into the Payload folder
+          cp -r build/ios/iphoneos/Runner.app build/Payload/
+          
+          # 4. Zip the Payload folder to create the final .ipa file
+          cd build
+          zip -q -r AdminChat.ipa Payload
     artifacts:
-      - admin_chat/build/ios/iphonesimulator/*.app
+      - admin_chat/build/*.ipa
 
-  client-chat-ios-app:
-    name: Client Chat iOS (.app)
+  client-chat-ios-ipa:
+    name: Client Chat iOS (Unsigned IPA)
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
@@ -40,9 +52,21 @@ workflows:
         script: |
           cd client_chat/ios
           pod install
-      - name: Build iOS .app Bundle
+      - name: Build Unsigned IPA for Sideloadly
         script: |
           cd client_chat
-          flutter build ios --simulator
+          
+          # 1. Build for physical iOS device architectures without Apple Developer code signing
+          flutter build ios --release --no-codesign
+          
+          # 2. Create the required Payload directory structure
+          mkdir -p build/Payload
+          
+          # 3. Copy the compiled device Runner.app into the Payload folder
+          cp -r build/ios/iphoneos/Runner.app build/Payload/
+          
+          # 4. Zip the Payload folder to create the final .ipa file
+          cd build
+          zip -q -r ClientChat.ipa Payload
     artifacts:
-      - client_chat/build/ios/iphonesimulator/*.app
+      - client_chat/build/*.ipa

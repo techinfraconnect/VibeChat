@@ -5,6 +5,7 @@ plugins {
 }
 
 android {
+    ndkVersion = "28.2.13676358"
     namespace = "com.vibechat.client_chat"
     compileSdk = 36
 

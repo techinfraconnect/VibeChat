@@ -28,9 +28,14 @@
     <true/>
     
     <key>NSCameraUsageDescription</key>
-    <string>Camera access is required for video calls.</string>
+    <string>We need access to your camera for video calls.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Microphone access is required for audio/video calls.</string>
+    <string>We need access to your microphone for audio calls.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+        <string>voip</string>
+    </array>
     
     <!-- APPLE LOCAL NETWORK SECURITY FIX (REQUIRED FOR WEBRTC) -->
     <key>NSLocalNetworkUsageDescription</key>
