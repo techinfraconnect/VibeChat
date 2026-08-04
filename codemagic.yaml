@@ -1,17 +1,38 @@
 workflows:
-  ios-unsigned-workflow:
-    name: iOS Unsigned Build
-    max_build_duration: 60
-    working_directory: admin_chat
+  admin-chat-ios-unsigned:
+    name: Admin Chat iOS (Unsigned)
+    max_build_duration: 30
+    instance_type: mac_mini_m2
     environment:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Build Device App
+      - name: Get Flutter Packages
         script: |
-          flutter create . --platforms=ios
-          flutter clean
+          cd admin_chat
           flutter pub get
+      - name: Build iOS App Unsigned
+        script: |
+          cd admin_chat
           flutter build ios --release --no-codesign
     artifacts:
-      - build/ios/iphoneos/*.app
+      - admin_chat/build/ios/iphoneos/*.app
+
+  client-chat-ios-unsigned:
+    name: Client Chat iOS (Unsigned)
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Get Flutter Packages
+        script: |
+          cd client_chat
+          flutter pub get
+      - name: Build iOS App Unsigned
+        script: |
+          cd client_chat
+          flutter build ios --release --no-codesign
+    artifacts:
+      - client_chat/build/ios/iphoneos/*.app
