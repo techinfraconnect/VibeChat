@@ -6,14 +6,23 @@ final GlobalKey<NavigatorState> adminNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  SocketService().initSocket('admin', adminNavigatorKey);
-
   runApp(const AdminApp());
 }
 
-class AdminApp extends StatelessWidget {
+class AdminApp extends StatefulWidget {
   const AdminApp({super.key});
+
+  @override
+  State<AdminApp> createState() => _AdminAppState();
+}
+
+class _AdminAppState extends State<AdminApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Initialize socket connection globally for Admin
+    SocketService().initSocket('admin', adminNavigatorKey);
+  }
 
   @override
   Widget build(BuildContext context) {

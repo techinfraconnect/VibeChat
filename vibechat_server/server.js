@@ -20,13 +20,15 @@ const activeUsers = new Map();
 io.on('connection', (socket) => {
   console.log(`[Socket] Connected: ${socket.id}`);
 
-  // Register user (e.g., 'admin' or 'client')
+  // Register user ID (e.g., 'admin' or 'client_123')
   socket.on('register', (data) => {
-    const userId = data.userId || data;
-    activeUsers.set(userId, socket.id);
-    socket.userId = userId;
-    console.log(`[Register] User '${userId}' registered on socket '${socket.id}'`);
-    console.log(`[Active Users]`, Array.from(activeUsers.keys()));
+    const userId = typeof data === 'object' ? data.userId : data;
+    if (userId) {
+      activeUsers.set(userId, socket.id);
+      socket.userId = userId;
+      console.log(`[Register] User '${userId}' registered on socket '${socket.id}'`);
+      console.log(`[Active Users]`, Array.from(activeUsers.keys()));
+    }
   });
 
   // Call Initiation
@@ -47,11 +49,12 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Call Response
-  socket.on('answer_call', (data) => {
+  // Call Handshake Response
+  socket.on('accept_call', (data) => {
     const callerSocketId = activeUsers.get(data.callerId);
     if (callerSocketId) {
-      io.to(callerSocketId).emit('call_answered', data);
+      io.to(callerSocketId).emit('call_accepted', data);
+      console.log(`[Call] ${data.receiverId} accepted call from ${data.callerId}`);
     }
   });
 
@@ -69,7 +72,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // WebRTC Signaling
+  // WebRTC Signaling Events
   socket.on('offer', (data) => {
     const targetSocketId = activeUsers.get(data.targetUser);
     if (targetSocketId) {

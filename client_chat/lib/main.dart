@@ -7,14 +7,23 @@ final GlobalKey<NavigatorState> clientNavigatorKey =
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  SocketService().initSocket('client_123', clientNavigatorKey);
-
   runApp(const ClientApp());
 }
 
-class ClientApp extends StatelessWidget {
+class ClientApp extends StatefulWidget {
   const ClientApp({super.key});
+
+  @override
+  State<ClientApp> createState() => _ClientAppState();
+}
+
+class _ClientAppState extends State<ClientApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Initialize socket connection globally for Client
+    SocketService().initSocket('client_123', clientNavigatorKey);
+  }
 
   @override
   Widget build(BuildContext context) {

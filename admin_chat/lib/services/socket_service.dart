@@ -15,7 +15,7 @@ class SocketService {
     currentUserId = userId;
     _navigatorKey = navigatorKey;
 
-    // Replace with your PC's local IP address or Server URL
+    // Change to your machine's Local IP or Server domain
     socket = io.io('http://192.168.1.15:3000', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
@@ -28,6 +28,7 @@ class SocketService {
       socket.emit('register', {'userId': userId});
     });
 
+    // Global listener for incoming call notification
     socket.on('incoming_call', (data) {
       debugPrint('[SocketService] Admin received incoming_call: $data');
 

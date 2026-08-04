@@ -63,15 +63,15 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   }
 
   void _startCall(bool isVideo) {
-    const String targetClient = 'client_123'; // Target Client User ID
+    const String targetClient = 'client_123';
 
-    // 1. Emit call_user event via SocketService to alert the receiving app
+    // Emit socket trigger to wake up receiving client
     SocketService().initiateCall(
       receiverId: targetClient,
       isVideoCall: isVideo,
     );
 
-    // 2. Navigate Admin to CallScreen as Caller
+    // Navigate Caller to CallScreen
     Navigator.push(
       context,
       MaterialPageRoute(
