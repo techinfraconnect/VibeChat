@@ -1,26 +1,24 @@
 plugins {
     id("com.android.application")
-    kotlin("android")
-    id("com.google.gms.google-services")
+    id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "com.vibechat.client_chat"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.vibechat.client_chat"
+        minSdk = 24
+        targetSdk = 36
+        versionCode = 1
+        versionName = "1.0.0"
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    defaultConfig {
-        applicationId = "com.vibechat.client_chat"
-        minSdk = 26
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
     }
 
     buildTypes {
@@ -31,10 +29,6 @@ android {
 }
 
 kotlin {
-    compilerOptions {
-        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
-    }
-    // Ensures Kotlin toolchain matches Java 17 target cleanly
     jvmToolchain(17)
 }
 

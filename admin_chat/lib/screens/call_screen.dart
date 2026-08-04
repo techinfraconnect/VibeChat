@@ -142,7 +142,7 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     _peerConnection?.onIceCandidate = (candidate) {
-      if (candidate != null) {
+      if (candidate.candidate != null) {
         widget.socket.emit('ice_candidate', {
           'targetUser': widget.targetUser,
           'candidate': {
