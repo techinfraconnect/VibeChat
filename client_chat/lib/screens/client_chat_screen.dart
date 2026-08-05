@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'call_screen.dart';
 
 class ClientChatScreen extends StatefulWidget {
   final String senderName;
-  final IO.Socket socket;
+  final io.Socket socket;
 
   const ClientChatScreen({
     super.key,
@@ -31,17 +31,26 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
     widget.socket.off('incoming_call');
 
     widget.socket.on('receive_message', (data) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _messages.add(Map<String, dynamic>.from(data));
       });
     });
 
     widget.socket.on('incoming_call', (data) {
-      print('🔔 CLIENT RECEIVED INCOMING CALL');
-      if (!mounted) return;
-      if (data['callerName'] == widget.senderName)
+      // FIX 1: Replaced print with debugPrint
+      debugPrint('🔔 CLIENT RECEIVED INCOMING CALL');
+
+      // FIX 2: Added curly braces to all 'if' statements
+      if (!mounted) {
+        return;
+      }
+      if (data['callerName'] == widget.senderName) {
         return; // Prevent self-calling echo
+      }
+
       _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }

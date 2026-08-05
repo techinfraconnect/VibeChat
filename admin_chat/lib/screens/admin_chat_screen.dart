@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'call_screen.dart';
 
 class AdminChatScreen extends StatefulWidget {
   final String senderName;
-  final IO.Socket socket;
+  final io.Socket socket;
 
   const AdminChatScreen({
     super.key,
@@ -38,10 +38,13 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     });
 
     widget.socket.on('incoming_call', (data) {
-      print('🔔 ADMIN RECEIVED INCOMING CALL');
-      if (!mounted) return;
-      if (data['callerName'] == widget.senderName)
-        return; // Prevent self-calling echo
+      debugPrint('🔔 ADMIN RECEIVED INCOMING CALL');
+      if (!mounted) {
+        return;
+      }
+      if (data['callerName'] == widget.senderName) {
+        return;
+      }
       _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }

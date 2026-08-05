@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'screens/admin_chat_screen.dart';
 import 'services/socket_service.dart';
 
+// Global navigator key
 final GlobalKey<NavigatorState> adminNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
@@ -20,8 +21,8 @@ class _AdminAppState extends State<AdminApp> {
   @override
   void initState() {
     super.initState();
-    // Initialize socket connection globally for Admin
-    SocketService().initSocket('admin', adminNavigatorKey);
+    // FIX 1: Pass only the single required username string 'admin'
+    SocketService().initSocket('admin');
   }
 
   @override
@@ -31,7 +32,11 @@ class _AdminAppState extends State<AdminApp> {
       navigatorKey: adminNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const AdminChatScreen(),
+      // FIX 2: Pass required named parameters 'senderName' and 'socket'
+      home: AdminChatScreen(
+        senderName: 'admin',
+        socket: SocketService().socket,
+      ),
     );
   }
 }

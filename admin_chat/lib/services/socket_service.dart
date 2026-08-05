@@ -1,38 +1,41 @@
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:flutter/foundation.dart'; // Required for debugPrint
+import 'package:socket_io_client/socket_io_client.dart'
+    as io; // FIX: Changed 'IO' to 'io'
 
 class SocketService {
   static final SocketService _instance = SocketService._internal();
   factory SocketService() => _instance;
   SocketService._internal();
 
-  late IO.Socket socket;
+  late io.Socket socket; // FIX: Changed 'IO.Socket' to 'io.Socket'
   bool _isInitialized = false;
 
   void initSocket(String username) {
     if (_isInitialized) return;
 
-    // Standard URL without port overrides.
-    // Allowing both polling and websocket ensures Render's load balancer accepts the connection.
-    socket = IO.io(
+    // FIX: Changed 'IO.io' and 'IO.OptionBuilder' to 'io'
+    socket = io.io(
       'https://vibechat-server-vo3f.onrender.com',
-      <String, dynamic>{
-        'transports': ['websocket', 'polling'],
-        'autoConnect':
-            false, // We will manually connect below to prevent race conditions
-      },
+      io.OptionBuilder()
+          .setTransports(['websocket', 'polling'])
+          .disableAutoConnect() // We manually connect below
+          .build(),
     );
 
     // Register listeners BEFORE connecting
+    // FIX: Replaced all 'print' statements with 'debugPrint'
     socket.onConnect((_) {
-      print('\n=================================');
-      print('🟢 $username SOCKET CONNECTED SUCCESSFULLY');
-      print('SOCKET ID: ${socket.id}');
-      print('=================================\n');
+      debugPrint('\n=================================');
+      debugPrint('🟢 $username SOCKET CONNECTED SUCCESSFULLY');
+      debugPrint('SOCKET ID: ${socket.id}');
+      debugPrint('=================================\n');
     });
 
-    socket.onConnectError((data) => print('\n❌ SOCKET CONNECT ERROR: $data\n'));
-    socket.onError((data) => print('\n❌ SOCKET ERROR: $data\n'));
-    socket.onDisconnect((_) => print('\n🔴 SOCKET DISCONNECTED\n'));
+    socket.onConnectError(
+      (data) => debugPrint('\n❌ SOCKET CONNECT ERROR: $data\n'),
+    );
+    socket.onError((data) => debugPrint('\n❌ SOCKET ERROR: $data\n'));
+    socket.onDisconnect((_) => debugPrint('\n🔴 SOCKET DISCONNECTED\n'));
 
     // Execute connection
     socket.connect();
