@@ -12,8 +12,22 @@ const io = new Server(server, {
   }
 });
 
+// Persistent state for the admin's mute setting preference
+let clientCanMute = true; 
+
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
+
+  // Send current admin setting to newly connected clients/admin
+  socket.emit('update_settings', { clientCanMute });
+
+  // --- ADMIN SETTINGS SYNC ---
+  socket.on('update_settings', (data) => {
+    clientCanMute = data.clientCanMute;
+    console.log(`⚙️ Settings updated by admin: clientCanMute = ${clientCanMute}`);
+    // Broadcast setting change instantly to all other clients
+    socket.broadcast.emit('update_settings', { clientCanMute });
+  });
 
   // --- CHAT MESSAGES ---
   socket.on('send_message', (data) => {
@@ -21,9 +35,16 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('receive_message', data);
   });
 
+  socket.on('edit_message', (data) => {
+    console.log(`✏️ Message edited at index ${data.index}`);
+    socket.broadcast.emit('edit_message', data);
+  });
+
   // --- CALL HANDSHAKE ---
   socket.on('call_invite', (data) => {
     console.log(`🔔 Call invite triggered by: ${data.callerName}`);
+    // Ensure the invite passes along the current mute setting state
+    data.clientCanMute = clientCanMute;
     socket.broadcast.emit('incoming_call', data);
   });
 

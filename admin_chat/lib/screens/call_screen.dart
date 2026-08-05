@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
@@ -8,6 +9,8 @@ class CallScreen extends StatefulWidget {
   final bool isVideoCall;
   final bool isCaller;
   final io.Socket socket;
+  final bool clientCanMute;
+  final bool isAdmin; // Identifies if this device belongs to the admin
 
   const CallScreen({
     super.key,
@@ -16,6 +19,8 @@ class CallScreen extends StatefulWidget {
     required this.isVideoCall,
     required this.isCaller,
     required this.socket,
+    this.clientCanMute = true,
+    this.isAdmin = false,
   });
 
   @override
@@ -30,13 +35,11 @@ class _CallScreenState extends State<CallScreen> {
 
   bool _isConnecting = true;
   bool _isMuted = false;
-
-  // NEW: Camera state
   bool _isFrontCamera = true;
+  late bool _canMute;
 
-  // NEW: PIP Positioning state
-  double _pipTop = 40.0;
-  double _pipLeft = -1.0; // -1 acts as an uninitialized flag
+  double _pipTop = 60.0;
+  double _pipLeft = -1.0;
 
   bool _isRemoteDescriptionSet = false;
   final List<RTCIceCandidate> _remoteCandidatesQueue = [];
@@ -44,6 +47,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
+    _canMute = widget.clientCanMute;
     _initRenderers();
     _initWebRTC();
   }
@@ -83,7 +87,6 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     _peerConnection?.onTrack = (RTCTrackEvent event) {
-      debugPrint("📺 TRACK RECEIVED: ${event.track.kind}");
       if (event.streams.isNotEmpty && mounted) {
         setState(() {
           _remoteRenderer.srcObject = event.streams[0];
@@ -93,7 +96,6 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     _peerConnection?.onAddStream = (MediaStream stream) {
-      debugPrint("📺 STREAM RECEIVED");
       if (mounted) {
         setState(() {
           _remoteRenderer.srcObject = stream;
@@ -103,7 +105,6 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      debugPrint("🧊 Sending Local ICE Candidate");
       widget.socket.emit('ice-candidate', {
         'candidate': candidate.candidate,
         'sdpMid': candidate.sdpMid,
@@ -112,7 +113,6 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
-      debugPrint('📶 ICE Connection State: $state');
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
         if (mounted) setState(() => _isConnecting = false);
       }
@@ -127,7 +127,6 @@ class _CallScreenState extends State<CallScreen> {
 
   void _setupSocketListeners() {
     widget.socket.on('call_ready_for_offer', (_) async {
-      debugPrint("📞 Receiver is ready. Creating Offer...");
       if (widget.isCaller && _peerConnection != null) {
         RTCSessionDescription offer = await _peerConnection!.createOffer();
         await _peerConnection!.setLocalDescription(offer);
@@ -136,7 +135,6 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     widget.socket.on('offer', (data) async {
-      debugPrint("📦 Received Offer. Creating Answer...");
       if (!widget.isCaller && _peerConnection != null) {
         await _peerConnection!.setRemoteDescription(
           RTCSessionDescription(data['sdp'], data['type']),
@@ -151,7 +149,6 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     widget.socket.on('answer', (data) async {
-      debugPrint("📦 Received Answer.");
       if (widget.isCaller && _peerConnection != null) {
         await _peerConnection!.setRemoteDescription(
           RTCSessionDescription(data['sdp'], data['type']),
@@ -177,6 +174,17 @@ class _CallScreenState extends State<CallScreen> {
       }
     });
 
+    // Listen to admin toggle changes in real-time
+    widget.socket.on('update_settings', (data) {
+      if (!mounted) return;
+      setState(() {
+        _canMute = data['clientCanMute'] ?? true;
+        if (!widget.isAdmin && !_canMute && _isMuted) {
+          _toggleMute(); // Force unmute if restriction is applied while muted
+        }
+      });
+    });
+
     widget.socket.on('end-call', (_) => _endCallLocally());
     widget.socket.on('call_rejected', (_) => _endCallLocally());
   }
@@ -188,18 +196,27 @@ class _CallScreenState extends State<CallScreen> {
     _remoteCandidatesQueue.clear();
   }
 
-  void _toggleMute() {
+  Future<void> _toggleMute() async {
+    // If client and admin turned off mute capability, prevent action
+    if (!widget.isAdmin && !_canMute) return;
+
     if (_localStream != null && _localStream!.getAudioTracks().isNotEmpty) {
-      bool isCurrentlyEnabled = _localStream!.getAudioTracks()[0].enabled;
-      _localStream!.getAudioTracks()[0].enabled = !isCurrentlyEnabled;
+      bool newState = !_isMuted;
+      _localStream!.getAudioTracks()[0].enabled = !newState;
+
+      var senders = await _peerConnection!.getSenders();
+      for (var sender in senders) {
+        if (sender.track?.kind == 'audio') {
+          sender.track?.enabled = !newState;
+        }
+      }
 
       setState(() {
-        _isMuted = !isCurrentlyEnabled;
+        _isMuted = newState;
       });
     }
   }
 
-  // NEW: Toggle between front and back camera
   void _toggleCamera() async {
     if (_localStream != null && _localStream!.getVideoTracks().isNotEmpty) {
       final videoTrack = _localStream!.getVideoTracks().first;
@@ -223,6 +240,7 @@ class _CallScreenState extends State<CallScreen> {
     widget.socket.off('offer');
     widget.socket.off('answer');
     widget.socket.off('ice-candidate');
+    widget.socket.off('update_settings');
     widget.socket.off('end-call');
     widget.socket.off('call_rejected');
 
@@ -243,58 +261,80 @@ class _CallScreenState extends State<CallScreen> {
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
 
-    // Initialize PIP position to top-right on the first build
     if (_pipLeft == -1.0) {
-      _pipLeft = screenWidth - 120.0; // 100 width + 20 padding
+      _pipLeft = screenWidth - 130.0;
     }
 
+    // Determine if mute button should show: Admins always see it. Clients see it only if widget.isAdmin is false AND _canMute is true.
+    bool showMuteButton = widget.isAdmin || _canMute;
+
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF0C0C0E),
       body: Stack(
         children: [
-          // Remote Media (Fullscreen)
           if (!_isConnecting && widget.isVideoCall)
-            RTCVideoView(
-              _remoteRenderer,
-              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            Positioned.fill(
+              child: RTCVideoView(
+                _remoteRenderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              ),
             )
           else
             Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircleAvatar(
-                    radius: 50,
-                    backgroundColor: Colors.indigo[200],
-                    child: Icon(
-                      Icons.person,
-                      size: 50,
-                      color: Colors.indigo[800],
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: CircleAvatar(
+                      radius: 55,
+                      backgroundColor: const Color(0xFF1C1C1E),
+                      child: Text(
+                        widget.targetUser.isNotEmpty
+                            ? widget.targetUser[0].toUpperCase()
+                            : "U",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 36,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 24),
                   Text(
                     widget.targetUser,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Text(
                     _isConnecting
-                        ? "Connecting WebRTC..."
+                        ? "Connecting..."
                         : (widget.isVideoCall
                               ? "Video Paused"
-                              : "Audio Call Active"),
-                    style: const TextStyle(color: Colors.white70, fontSize: 16),
+                              : "Secure Audio Call"),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w400,
+                    ),
                   ),
                 ],
               ),
             ),
 
-          // NEW: Draggable Local Media (Picture-in-Picture)
           if (!_isConnecting && widget.isVideoCall)
             Positioned(
               left: _pipLeft,
@@ -304,32 +344,32 @@ class _CallScreenState extends State<CallScreen> {
                   setState(() {
                     _pipLeft += details.delta.dx;
                     _pipTop += details.delta.dy;
-
-                    // Clamping ensures the PIP doesn't get dragged off-screen
-                    _pipLeft = _pipLeft.clamp(0.0, screenWidth - 100.0);
-                    _pipTop = _pipTop.clamp(0.0, screenHeight - 150.0);
+                    _pipLeft = _pipLeft.clamp(16.0, screenWidth - 126.0);
+                    _pipTop = _pipTop.clamp(40.0, screenHeight - 200.0);
                   });
                 },
                 child: Container(
-                  width: 100,
-                  height: 150,
+                  width: 110,
+                  height: 160,
                   decoration: BoxDecoration(
-                    color: Colors.black54,
-                    border: Border.all(color: Colors.white, width: 2),
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: const [
+                    color: const Color(0xFF1C1C1E),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      width: 1,
+                    ),
+                    boxShadow: [
                       BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 8,
-                        spreadRadius: 2,
+                        color: Colors.black.withValues(alpha: 0.4),
+                        blurRadius: 16,
+                        offset: const Offset(0, 8),
                       ),
                     ],
                   ),
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(15),
                     child: RTCVideoView(
                       _localRenderer,
-                      // Turn off mirroring when using the back camera so text is readable
                       mirror: _isFrontCamera,
                       objectFit:
                           RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
@@ -339,45 +379,103 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
 
-          // Controls
           Positioned(
-            bottom: 50,
+            bottom: 40,
             left: 0,
             right: 0,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                // Camera Switch Button (Only visible during video calls)
-                if (widget.isVideoCall)
-                  FloatingActionButton(
-                    heroTag: "camera_switch_btn",
-                    backgroundColor: Colors.grey[800],
-                    onPressed: _toggleCamera,
-                    child: const Icon(Icons.cameraswitch, color: Colors.white),
-                  ),
+            child: Center(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(35),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2C2C2E).withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(35),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.isVideoCall) ...[
+                          _buildGlassButton(
+                            icon: Icons.cameraswitch_rounded,
+                            onPressed: _toggleCamera,
+                            isActive: false,
+                          ),
+                          const SizedBox(width: 16),
+                        ],
 
-                // Mute Button
-                FloatingActionButton(
-                  heroTag: "mute_btn",
-                  backgroundColor: _isMuted ? Colors.red : Colors.grey[800],
-                  onPressed: _toggleMute,
-                  child: Icon(
-                    _isMuted ? Icons.mic_off : Icons.mic,
-                    color: Colors.white,
+                        // Dynamically show/hide Mute button based on Admin toggle rule
+                        if (showMuteButton) ...[
+                          _buildGlassButton(
+                            icon: _isMuted
+                                ? Icons.mic_off_rounded
+                                : Icons.mic_rounded,
+                            onPressed: _toggleMute,
+                            isActive: _isMuted,
+                          ),
+                          const SizedBox(width: 16),
+                        ],
+
+                        _buildGlassButton(
+                          icon: Icons.call_end_rounded,
+                          onPressed: _endCall,
+                          isDestructive: true,
+                          isActive: false,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-
-                // End Call Button
-                FloatingActionButton(
-                  heroTag: "end_btn",
-                  backgroundColor: Colors.red,
-                  onPressed: _endCall,
-                  child: const Icon(Icons.call_end, color: Colors.white),
-                ),
-              ],
+              ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildGlassButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required bool isActive,
+    bool isDestructive = false,
+  }) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        width: 54,
+        height: 54,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: isDestructive
+              ? const Color(0xFFFF3B30)
+              : (isActive
+                    ? Colors.white
+                    : const Color(0xFF3A3A3C).withValues(alpha: 0.8)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Icon(
+          icon,
+          color: isDestructive
+              ? Colors.white
+              : (isActive ? Colors.black : Colors.white),
+          size: 24,
+        ),
       ),
     );
   }

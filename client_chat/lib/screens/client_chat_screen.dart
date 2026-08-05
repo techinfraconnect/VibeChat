@@ -20,6 +20,9 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final List<Map<String, dynamic>> _messages = [];
 
+  int? _editingIndex;
+  bool _clientCanMute = true; // Synced live from admin settings
+
   @override
   void initState() {
     super.initState();
@@ -28,25 +31,46 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
   void _setupSocketListeners() {
     widget.socket.off('receive_message');
+    widget.socket.off('edit_message');
+    widget.socket.off('update_settings');
     widget.socket.off('incoming_call');
 
     widget.socket.on('receive_message', (data) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       setState(() {
         _messages.add(Map<String, dynamic>.from(data));
       });
     });
 
+    widget.socket.on('edit_message', (data) {
+      if (!mounted) return;
+      setState(() {
+        int index = data['index'];
+        if (index < _messages.length) {
+          _messages[index]['message'] = data['message'];
+        }
+      });
+    });
+
+    // Real-time listener for Admin toggles
+    widget.socket.on('update_settings', (data) {
+      if (!mounted) return;
+      setState(() {
+        _clientCanMute = data['clientCanMute'] ?? true;
+      });
+      debugPrint("⚙️ Client mute permission updated by admin: $_clientCanMute");
+    });
+
     widget.socket.on('incoming_call', (data) {
-      debugPrint('🔔 CLIENT RECEIVED INCOMING CALL');
-      if (!mounted) {
-        return;
+      if (!mounted) return;
+      if (data['callerName'] == widget.senderName) return;
+
+      if (data['clientCanMute'] != null) {
+        setState(() {
+          _clientCanMute = data['clientCanMute'];
+        });
       }
-      if (data['callerName'] == widget.senderName) {
-        return; // Prevent self-calling echo
-      }
+
       _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
   }
@@ -56,9 +80,14 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: Text("Incoming Call from ${data['callerName']}"),
+        backgroundColor: const Color(0xFF1C1C1E),
+        title: Text(
+          "Incoming Call from ${data['callerName']}",
+          style: const TextStyle(color: Colors.white),
+        ),
         content: Text(
           "Type: ${data['isVideoCall'] == true ? 'Video Call' : 'Audio Call'}",
+          style: const TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
@@ -66,17 +95,15 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
               Navigator.pop(ctx);
               widget.socket.emit('call_rejected');
             },
-            child: const Text("Decline", style: TextStyle(color: Colors.red)),
+            child: const Text(
+              "Decline",
+              style: TextStyle(color: Color(0xFFFF3B30)),
+            ),
           ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
             onPressed: () {
-              // 1. Close the dialog
               Navigator.pop(ctx);
-
-              // 2. We DO NOT emit 'call_accepted' here anymore.
-              // The CallScreen will handle it once the media is ready.
-
-              // 3. Open the call screen
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -86,38 +113,59 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                     isVideoCall: data['isVideoCall'] ?? false,
                     isCaller: false,
                     socket: widget.socket,
+                    clientCanMute: _clientCanMute,
+                    isAdmin: false,
                   ),
                 ),
               );
             },
-            child: const Text("Accept"),
+            child: const Text("Accept", style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
 
-  void _sendMessage() {
+  void _handleSubmit() {
     if (_messageController.text.trim().isEmpty) return;
 
-    final messageData = {
-      'sender': widget.senderName,
-      'message': _messageController.text.trim(),
-    };
-
-    widget.socket.emit('send_message', messageData);
-
-    setState(() {
-      _messages.add(messageData);
-    });
+    if (_editingIndex != null) {
+      setState(() {
+        _messages[_editingIndex!]['message'] = _messageController.text.trim();
+      });
+      widget.socket.emit('edit_message', {
+        'index': _editingIndex,
+        'message': _messageController.text.trim(),
+      });
+      _editingIndex = null;
+    } else {
+      final messageData = {
+        'sender': widget.senderName,
+        'message': _messageController.text.trim(),
+      };
+      widget.socket.emit('send_message', messageData);
+      setState(() {
+        _messages.add(messageData);
+      });
+    }
 
     _messageController.clear();
+  }
+
+  void _startEditing(int index) {
+    if (_messages[index]['sender'] == widget.senderName) {
+      setState(() {
+        _editingIndex = index;
+        _messageController.text = _messages[index]['message'];
+      });
+    }
   }
 
   void _initiateCall(bool isVideo) {
     widget.socket.emit('call_invite', {
       'callerName': widget.senderName,
       'isVideoCall': isVideo,
+      'clientCanMute': _clientCanMute,
     });
 
     Navigator.push(
@@ -125,10 +173,12 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       MaterialPageRoute(
         builder: (context) => CallScreen(
           callerName: widget.senderName,
-          targetUser: "admin",
+          targetUser: "Admin",
           isVideoCall: isVideo,
           isCaller: true,
           socket: widget.socket,
+          clientCanMute: _clientCanMute,
+          isAdmin: false,
         ),
       ),
     );
@@ -137,15 +187,22 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF0C0C0E),
       appBar: AppBar(
-        title: const Text("Client Chat"),
+        backgroundColor: const Color(0xFF1C1C1E),
+        elevation: 0,
+        title: const Text(
+          "Client",
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+        iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
-            icon: const Icon(Icons.call),
+            icon: const Icon(Icons.call_rounded),
             onPressed: () => _initiateCall(false),
           ),
           IconButton(
-            icon: const Icon(Icons.videocam),
+            icon: const Icon(Icons.videocam_rounded),
             onPressed: () => _initiateCall(true),
           ),
         ],
@@ -154,38 +211,104 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
                 bool isMe = msg['sender'] == widget.senderName;
-                return ListTile(
-                  title: Align(
+                return GestureDetector(
+                  onLongPress: () => _startEditing(index),
+                  child: Align(
                     alignment: isMe
                         ? Alignment.centerRight
                         : Alignment.centerLeft,
                     child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: isMe ? Colors.blue[100] : Colors.grey[300],
-                        borderRadius: BorderRadius.circular(8),
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
                       ),
-                      child: Text(msg['message'] ?? ''),
+                      constraints: BoxConstraints(
+                        maxWidth: MediaQuery.of(context).size.width * 0.75,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isMe
+                            ? const Color(0xFF0A84FF)
+                            : const Color(0xFF2C2C2E),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        msg['message'] ?? '',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
                 );
               },
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                Expanded(child: TextField(controller: _messageController)),
-                IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed: _sendMessage,
+          SafeArea(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C1C1E),
+                border: Border(
+                  top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
                 ),
-              ],
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2C2C2E),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: TextField(
+                        controller: _messageController,
+                        maxLines: 5,
+                        minLines: 1,
+                        style: const TextStyle(color: Colors.white),
+                        textInputAction: TextInputAction.newline,
+                        decoration: InputDecoration(
+                          hintText: _editingIndex != null
+                              ? "Edit message..."
+                              : "Type a message...",
+                          hintStyle: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.4),
+                          ),
+                          border: InputBorder.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: _handleSubmit,
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFF0A84FF),
+                      ),
+                      child: Icon(
+                        _editingIndex != null
+                            ? Icons.check
+                            : Icons.send_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
