@@ -12,71 +12,89 @@ const io = new Server(server, {
   }
 });
 
-// Persistent state for the admin's mute setting preference
-let clientCanMute = true; 
+let clientCanMute = true;
+let showCallLogsToClient = true;
+let chatHistory = [];       
+let callLogs = [];          
+let offlineMessages = [];   
 
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
 
-  // Send current admin setting to newly connected clients/admin
-  socket.emit('update_settings', { clientCanMute });
+  // Send current states & history to newly connected device
+  socket.emit('update_settings', { clientCanMute, showCallLogsToClient });
+  socket.emit('chat_history', chatHistory);
+  socket.emit('call_logs', callLogs);
 
-  // --- ADMIN SETTINGS SYNC ---
+  // Deliver any pending offline messages
+  if (offlineMessages.length > 0) {
+    offlineMessages.forEach(msg => {
+      socket.emit('receive_message', msg);
+    });
+    offlineMessages = [];
+  }
+
   socket.on('update_settings', (data) => {
-    clientCanMute = data.clientCanMute;
-    console.log(`⚙️ Settings updated by admin: clientCanMute = ${clientCanMute}`);
-    // Broadcast setting change instantly to all other connected apps
-    socket.broadcast.emit('update_settings', { clientCanMute });
+    if (data.clientCanMute !== undefined) clientCanMute = data.clientCanMute;
+    if (data.showCallLogsToClient !== undefined) showCallLogsToClient = data.showCallLogsToClient;
+    socket.broadcast.emit('update_settings', { clientCanMute, showCallLogsToClient });
   });
 
-  // --- CHAT MESSAGES ---
   socket.on('send_message', (data) => {
     console.log(`✉️ Message sent by ${data.sender}`);
-    socket.broadcast.emit('receive_message', data);
+    chatHistory.push(data);
+    
+    if (io.engine.clientsCount < 2) {
+      offlineMessages.push(data);
+    } else {
+      socket.broadcast.emit('receive_message', data);
+    }
   });
 
   socket.on('edit_message', (data) => {
-    console.log(`✏️ Message edited at index ${data.index}`);
+    if (data.index < chatHistory.length) {
+      chatHistory[data.index].message = data.message;
+    }
     socket.broadcast.emit('edit_message', data);
   });
 
-  // --- CALL HANDSHAKE ---
+  // Call Logs & Invites
   socket.on('call_invite', (data) => {
-    console.log(`🔔 Call invite triggered by: ${data.callerName}`);
-    // Ensure the invite passes along the active mute setting state
     data.clientCanMute = clientCanMute;
+    data.showCallLogsToClient = showCallLogsToClient;
+    
+    const now = new Date();
+    const formattedDate = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
+    const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const logEntry = {
+      caller: data.callerName,
+      type: data.isVideoCall ? 'WhatsApp Video' : 'WhatsApp Audio',
+      status: 'Missed',
+      dateTime: `${formattedDate}, ${formattedTime}`
+    };
+    callLogs.unshift(logEntry);
+    
     socket.broadcast.emit('incoming_call', data);
+    io.emit('call_logs_update', callLogs);
   });
 
   socket.on('call_accepted', (data) => {
-    console.log(`✅ Call accepted`);
+    if (callLogs.length > 0) callLogs[0].status = 'Connected';
     socket.broadcast.emit('call_ready_for_offer', data);
+    io.emit('call_logs_update', callLogs);
   });
 
   socket.on('call_rejected', () => {
-    console.log(`❌ Call rejected`);
+    if (callLogs.length > 0) callLogs[0].status = 'Declined';
     socket.broadcast.emit('call_rejected');
+    io.emit('call_logs_update', callLogs);
   });
 
-  // --- WEBRTC SIGNALING ---
-  socket.on('offer', (data) => {
-    console.log(`📦 Relaying Offer`);
-    socket.broadcast.emit('offer', data);
-  });
-
-  socket.on('answer', (data) => {
-    console.log(`📦 Relaying Answer`);
-    socket.broadcast.emit('answer', data);
-  });
-
-  socket.on('ice-candidate', (data) => {
-    socket.broadcast.emit('ice-candidate', data);
-  });
-
-  socket.on('end-call', () => {
-    console.log(`📴 Call ended`);
-    socket.broadcast.emit('end-call');
-  });
+  socket.on('offer', (data) => socket.broadcast.emit('offer', data));
+  socket.on('answer', (data) => socket.broadcast.emit('answer', data));
+  socket.on('ice-candidate', (data) => socket.broadcast.emit('ice-candidate', data));
+  socket.on('end-call', () => socket.broadcast.emit('end-call'));
 
   socket.on('disconnect', () => {
     console.log(`🔴 DEVICE DISCONNECTED: ${socket.id}`);
@@ -85,5 +103,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 VibeChat Server is RUNNING on port ${PORT}`);
+  console.log(`🚀 VibeChat Server RUNNING on port ${PORT}`);
 });

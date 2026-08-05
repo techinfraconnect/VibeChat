@@ -1,6 +1,8 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'call_screen.dart';
+import 'call_logs_screen.dart';
 
 class ClientChatScreen extends StatefulWidget {
   final String senderName;
@@ -18,10 +20,12 @@ class ClientChatScreen extends StatefulWidget {
 
 class _ClientChatScreenState extends State<ClientChatScreen> {
   final TextEditingController _messageController = TextEditingController();
-  final List<Map<String, dynamic>> _messages = [];
+  List<Map<String, dynamic>> _messages = [];
+  List<Map<String, dynamic>> _callLogs = [];
 
   int? _editingIndex;
-  bool _clientCanMute = true; // Synced live from admin settings
+  bool _clientCanMute = true;
+  bool _showCallLogsToClient = true;
 
   @override
   void initState() {
@@ -30,10 +34,21 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   }
 
   void _setupSocketListeners() {
+    widget.socket.off('chat_history');
     widget.socket.off('receive_message');
     widget.socket.off('edit_message');
+    widget.socket.off('call_logs');
+    widget.socket.off('call_logs_update');
     widget.socket.off('update_settings');
     widget.socket.off('incoming_call');
+    widget.socket.off('call_rejected');
+
+    widget.socket.on('chat_history', (data) {
+      if (!mounted) return;
+      setState(() {
+        _messages = List<Map<String, dynamic>>.from(data);
+      });
+    });
 
     widget.socket.on('receive_message', (data) {
       if (!mounted) return;
@@ -52,76 +67,186 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       });
     });
 
-    // Real-time listener for Admin toggles
+    widget.socket.on('call_logs', (data) {
+      if (!mounted) return;
+      setState(() {
+        _callLogs = List<Map<String, dynamic>>.from(data);
+      });
+    });
+
+    widget.socket.on('call_logs_update', (data) {
+      if (!mounted) return;
+      setState(() {
+        _callLogs = List<Map<String, dynamic>>.from(data);
+      });
+    });
+
     widget.socket.on('update_settings', (data) {
       if (!mounted) return;
       setState(() {
-        _clientCanMute = data['clientCanMute'] ?? true;
+        if (data['clientCanMute'] != null)
+          _clientCanMute = data['clientCanMute'];
+        if (data['showCallLogsToClient'] != null)
+          _showCallLogsToClient = data['showCallLogsToClient'];
       });
-      debugPrint("⚙️ Client mute permission updated by admin: $_clientCanMute");
+    });
+
+    widget.socket.on('call_rejected', (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Call Declined.."),
+          backgroundColor: Colors.red,
+        ),
+      );
     });
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
       if (data['callerName'] == widget.senderName) return;
 
-      if (data['clientCanMute'] != null) {
-        setState(() {
+      setState(() {
+        if (data['clientCanMute'] != null)
           _clientCanMute = data['clientCanMute'];
-        });
-      }
+        if (data['showCallLogsToClient'] != null)
+          _showCallLogsToClient = data['showCallLogsToClient'];
+      });
 
-      _showIncomingCallDialog(Map<String, dynamic>.from(data));
+      _showFaceTimeCallDialog(Map<String, dynamic>.from(data));
     });
   }
 
-  void _showIncomingCallDialog(Map<String, dynamic> data) {
+  void _showFaceTimeCallDialog(Map<String, dynamic> data) {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1C1C1E),
-        title: Text(
-          "Incoming Call from ${data['callerName']}",
-          style: const TextStyle(color: Colors.white),
-        ),
-        content: Text(
-          "Type: ${data['isVideoCall'] == true ? 'Video Call' : 'Audio Call'}",
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              widget.socket.emit('call_rejected');
-            },
-            child: const Text(
-              "Decline",
-              style: TextStyle(color: Color(0xFFFF3B30)),
+      builder: (ctx) => BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Color(0xFF2C2C2E),
+                  Color(0xFF1C1C1E),
+                  Color(0xFF0C0C0E),
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
             ),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => CallScreen(
-                    callerName: data['callerName'],
-                    targetUser: data['callerName'],
-                    isVideoCall: data['isVideoCall'] ?? false,
-                    isCaller: false,
-                    socket: widget.socket,
-                    clientCanMute: _clientCanMute,
-                    isAdmin: false,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Spacer(),
+                CircleAvatar(
+                  radius: 55,
+                  backgroundColor: Colors.grey[800],
+                  child: Text(
+                    data['callerName'][0].toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 40,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              );
-            },
-            child: const Text("Accept", style: TextStyle(color: Colors.white)),
+                const SizedBox(height: 24),
+                Text(
+                  data['callerName'],
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  data['isVideoCall'] == true
+                      ? "Incoming Video Call..."
+                      : "Incoming Audio Call...",
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    fontSize: 18,
+                  ),
+                ),
+                const Spacer(),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 50,
+                    vertical: 60,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        children: [
+                          FloatingActionButton(
+                            heroTag: "decline_call",
+                            backgroundColor: const Color(0xFFFF3B30),
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              widget.socket.emit('call_rejected');
+                            },
+                            child: const Icon(
+                              Icons.call_end,
+                              color: Colors.white,
+                              size: 30,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            "Decline",
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      ),
+                      Column(
+                        children: [
+                          FloatingActionButton(
+                            heroTag: "accept_call",
+                            backgroundColor: const Color(0xFF34C759),
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => CallScreen(
+                                    callerName: data['callerName'],
+                                    targetUser: data['callerName'],
+                                    isVideoCall: data['isVideoCall'] ?? false,
+                                    isCaller: false,
+                                    socket: widget.socket,
+                                    clientCanMute: _clientCanMute,
+                                    isAdmin: false,
+                                  ),
+                                ),
+                              );
+                            },
+                            child: const Icon(
+                              Icons.call,
+                              color: Colors.white,
+                              size: 30,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            "Accept",
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -148,7 +273,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         _messages.add(messageData);
       });
     }
-
     _messageController.clear();
   }
 
@@ -166,6 +290,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       'callerName': widget.senderName,
       'isVideoCall': isVideo,
       'clientCanMute': _clientCanMute,
+      'showCallLogsToClient': _showCallLogsToClient,
     });
 
     Navigator.push(
@@ -197,6 +322,17 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         ),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          // Conditionally render call logs icon based on Admin permission toggle
+          if (_showCallLogsToClient)
+            IconButton(
+              icon: const Icon(Icons.history_rounded),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => CallLogsScreen(callLogs: _callLogs),
+                ),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.call_rounded),
             onPressed: () => _initiateCall(false),
@@ -276,7 +412,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                         maxLines: 5,
                         minLines: 1,
                         style: const TextStyle(color: Colors.white),
-                        textInputAction: TextInputAction.newline,
                         decoration: InputDecoration(
                           hintText: _editingIndex != null
                               ? "Edit message..."
@@ -285,6 +420,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                             color: Colors.white.withValues(alpha: 0.4),
                           ),
                           border: InputBorder.none,
+                          isDense: true,
                         ),
                       ),
                     ),
