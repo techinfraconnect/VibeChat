@@ -1,57 +1,42 @@
-import 'package:flutter/material.dart';
-import 'package:socket_io_client/socket_io_client.dart' as io;
-import '../screens/call_screen.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class SocketService {
   static final SocketService _instance = SocketService._internal();
   factory SocketService() => _instance;
   SocketService._internal();
 
-  io.Socket? socket;
-  String? currentUserId;
-  GlobalKey<NavigatorState>? navigatorKey;
+  late IO.Socket socket;
+  bool _isInitialized = false;
 
-  void initSocket(
-    String userId,
-    GlobalKey<NavigatorState> navKey, {
-    String serverUrl = 'http://10.0.2.2:3000',
-  }) {
-    currentUserId = userId;
-    navigatorKey = navKey;
+  void initSocket(String username) {
+    if (_isInitialized) return;
 
-    socket = io.io(
-      serverUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket'])
-          .disableAutoConnect()
-          .build(),
+    // Standard URL without port overrides.
+    // Allowing both polling and websocket ensures Render's load balancer accepts the connection.
+    socket = IO.io(
+      'https://vibechat-server-vo3f.onrender.com',
+      <String, dynamic>{
+        'transports': ['websocket', 'polling'],
+        'autoConnect':
+            false, // We will manually connect below to prevent race conditions
+      },
     );
 
-    socket!.connect();
-
-    socket!.onConnect((_) {
-      debugPrint('[SocketService] Connected as $userId');
-      socket!.emit('register', userId);
+    // Register listeners BEFORE connecting
+    socket.onConnect((_) {
+      print('\n=================================');
+      print('🟢 $username SOCKET CONNECTED SUCCESSFULLY');
+      print('SOCKET ID: ${socket.id}');
+      print('=================================\n');
     });
 
-    socket!.on('incoming_call', (data) {
-      debugPrint('[SocketService] Incoming call data: $data');
-      if (navigatorKey?.currentContext != null) {
-        Navigator.push(
-          navigatorKey!.currentContext!,
-          MaterialPageRoute(
-            builder: (_) => CallScreen(
-              callerName: data['callerName'] ?? data['callerId'],
-              targetUser: data['callerId'],
-              isVideoCall: data['isVideoCall'] ?? true,
-              isCaller: false,
-              socket: socket!,
-            ),
-          ),
-        );
-      }
-    });
+    socket.onConnectError((data) => print('\n❌ SOCKET CONNECT ERROR: $data\n'));
+    socket.onError((data) => print('\n❌ SOCKET ERROR: $data\n'));
+    socket.onDisconnect((_) => print('\n🔴 SOCKET DISCONNECTED\n'));
 
-    socket!.onDisconnect((_) => debugPrint('[SocketService] Disconnected'));
+    // Execute connection
+    socket.connect();
+
+    _isInitialized = true;
   }
 }

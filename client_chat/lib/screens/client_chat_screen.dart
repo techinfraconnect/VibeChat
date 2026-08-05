@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
-import '../services/socket_service.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'call_screen.dart';
 
 class ClientChatScreen extends StatefulWidget {
-  const ClientChatScreen({super.key});
+  final String senderName;
+  final IO.Socket socket;
+
+  const ClientChatScreen({
+    super.key,
+    required this.senderName,
+    required this.socket,
+  });
 
   @override
   State<ClientChatScreen> createState() => _ClientChatScreenState();
@@ -12,7 +19,6 @@ class ClientChatScreen extends StatefulWidget {
 class _ClientChatScreenState extends State<ClientChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final List<Map<String, dynamic>> _messages = [];
-  final String _targetUser = 'admin';
 
   @override
   void initState() {
@@ -21,47 +27,99 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   }
 
   void _setupSocketListeners() {
-    final socket = SocketService().socket;
-    if (socket != null) {
-      socket.off('receive_message');
-      socket.on('receive_message', (data) {
-        if (mounted) {
-          setState(() {
-            _messages.add(Map<String, dynamic>.from(data));
-          });
-        }
+    widget.socket.off('receive_message');
+    widget.socket.off('incoming_call');
+
+    widget.socket.on('receive_message', (data) {
+      if (!mounted) return;
+      setState(() {
+        _messages.add(Map<String, dynamic>.from(data));
       });
-    }
+    });
+
+    widget.socket.on('incoming_call', (data) {
+      print('🔔 CLIENT RECEIVED INCOMING CALL');
+      if (!mounted) return;
+      if (data['callerName'] == widget.senderName)
+        return; // Prevent self-calling echo
+      _showIncomingCallDialog(Map<String, dynamic>.from(data));
+    });
+  }
+
+  void _showIncomingCallDialog(Map<String, dynamic> data) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text("Incoming Call from ${data['callerName']}"),
+        content: Text(
+          "Type: ${data['isVideoCall'] == true ? 'Video Call' : 'Audio Call'}",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.socket.emit('call_rejected');
+            },
+            child: const Text("Decline", style: TextStyle(color: Colors.red)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.socket.emit('call_accepted');
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => CallScreen(
+                    callerName: data['callerName'],
+                    targetUser: data['callerName'],
+                    isVideoCall: data['isVideoCall'] ?? false,
+                    isCaller: false,
+                    socket: widget.socket,
+                  ),
+                ),
+              );
+            },
+            child: const Text("Accept"),
+          ),
+        ],
+      ),
+    );
   }
 
   void _sendMessage() {
-    final text = _messageController.text.trim();
-    if (text.isEmpty) return;
+    if (_messageController.text.trim().isEmpty) return;
 
     final messageData = {
-      'senderId': 'client_123',
-      'receiverId': _targetUser,
-      'text': text,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'sender': widget.senderName,
+      'message': _messageController.text.trim(),
     };
 
-    SocketService().socket?.emit('send_message', messageData);
+    widget.socket.emit('send_message', messageData);
+
+    // Add locally to the screen instantly
+    setState(() {
+      _messages.add(messageData);
+    });
+
     _messageController.clear();
   }
 
-  void _startCall({required bool isVideoCall}) {
-    final socket = SocketService().socket;
-    if (socket == null) return;
+  void _initiateCall(bool isVideo) {
+    widget.socket.emit('call_invite', {
+      'callerName': widget.senderName,
+      'isVideoCall': isVideo,
+    });
 
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CallScreen(
-          callerName: 'client_123',
-          targetUser: _targetUser,
-          isVideoCall: isVideoCall,
+        builder: (context) => CallScreen(
+          callerName: "Admin",
+          targetUser: "Admin",
+          isVideoCall: isVideo,
           isCaller: true,
-          socket: socket,
+          socket: widget.socket,
         ),
       ),
     );
@@ -71,15 +129,15 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Chat with Admin ($_targetUser)'),
+        title: Text("Client Chat"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.phone),
-            onPressed: () => _startCall(isVideoCall: false),
+            icon: const Icon(Icons.call),
+            onPressed: () => _initiateCall(false),
           ),
           IconButton(
             icon: const Icon(Icons.videocam),
-            onPressed: () => _startCall(isVideoCall: true),
+            onPressed: () => _initiateCall(true),
           ),
         ],
       ),
@@ -87,27 +145,22 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.all(16),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
-                final isMe = msg['senderId'] == 'client_123';
-                return Align(
-                  alignment: isMe
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isMe ? Colors.green : Colors.grey[300],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      msg['text'] ?? '',
-                      style: TextStyle(
-                        color: isMe ? Colors.white : Colors.black,
+                bool isMe = msg['sender'] == widget.senderName;
+                return ListTile(
+                  title: Align(
+                    alignment: isMe
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isMe ? Colors.blue[100] : Colors.grey[300],
+                        borderRadius: BorderRadius.circular(8),
                       ),
+                      child: Text(msg['message'] ?? ''),
                     ),
                   ),
                 );
@@ -118,15 +171,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
             padding: const EdgeInsets.all(8.0),
             child: Row(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: const InputDecoration(
-                      hintText: 'Type a message...',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
+                Expanded(child: TextField(controller: _messageController)),
                 IconButton(
                   icon: const Icon(Icons.send),
                   onPressed: _sendMessage,
