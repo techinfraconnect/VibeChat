@@ -7,66 +7,51 @@ class SocketService {
   factory SocketService() => _instance;
   SocketService._internal();
 
-  late io.Socket socket;
-  late String currentUserId;
-  GlobalKey<NavigatorState>? _navigatorKey;
+  io.Socket? socket;
+  String? currentUserId;
+  GlobalKey<NavigatorState>? navigatorKey;
 
-  void initSocket(String userId, GlobalKey<NavigatorState> navigatorKey) {
+  void initSocket(
+    String userId,
+    GlobalKey<NavigatorState> navKey, {
+    String serverUrl = 'http://10.0.2.2:3000',
+  }) {
     currentUserId = userId;
-    _navigatorKey = navigatorKey;
+    navigatorKey = navKey;
 
-    // Change to your machine's Local IP or Server domain
-    socket = io.io('http://192.168.1.15:3000', <String, dynamic>{
-      'transports': ['websocket'],
-      'autoConnect': false,
+    socket = io.io(
+      serverUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .disableAutoConnect()
+          .build(),
+    );
+
+    socket!.connect();
+
+    socket!.onConnect((_) {
+      debugPrint('[SocketService] Connected as $userId');
+      socket!.emit('register', userId);
     });
 
-    socket.connect();
-
-    socket.onConnect((_) {
-      debugPrint('[SocketService] Client Connected. Registering ID: $userId');
-      socket.emit('register', {'userId': userId});
-    });
-
-    // Global listener for incoming call notification
-    socket.on('incoming_call', (data) {
-      debugPrint('[SocketService] Client received incoming_call: $data');
-
-      final String caller = data['callerId'] ?? 'Admin';
-      final bool isVideo = data['isVideoCall'] ?? true;
-
-      if (_navigatorKey?.currentState != null) {
-        _navigatorKey!.currentState!.push(
+    socket!.on('incoming_call', (data) {
+      debugPrint('[SocketService] Incoming call data: $data');
+      if (navigatorKey?.currentContext != null) {
+        Navigator.push(
+          navigatorKey!.currentContext!,
           MaterialPageRoute(
-            builder: (context) => CallScreen(
-              callerName: caller,
-              targetUser: caller,
-              isVideoCall: isVideo,
+            builder: (_) => CallScreen(
+              callerName: data['callerName'] ?? data['callerId'],
+              targetUser: data['callerId'],
+              isVideoCall: data['isVideoCall'] ?? true,
               isCaller: false,
-              socket: socket,
+              socket: socket!,
             ),
           ),
         );
       }
     });
 
-    socket.on('user_offline', (data) {
-      debugPrint('[SocketService] User is offline: $data');
-      if (_navigatorKey?.currentContext != null) {
-        ScaffoldMessenger.of(_navigatorKey!.currentContext!).showSnackBar(
-          const SnackBar(content: Text('Admin is currently offline.')),
-        );
-      }
-    });
-  }
-
-  void initiateCall({required String receiverId, required bool isVideoCall}) {
-    debugPrint('[SocketService] Initiating call to $receiverId');
-    socket.emit('call_user', {
-      'callerId': currentUserId,
-      'callerName': 'Client',
-      'receiverId': receiverId,
-      'isVideoCall': isVideoCall,
-    });
+    socket!.onDisconnect((_) => debugPrint('[SocketService] Disconnected'));
   }
 }

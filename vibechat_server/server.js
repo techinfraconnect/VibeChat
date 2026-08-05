@@ -14,95 +14,93 @@ const io = new Server(server, {
   }
 });
 
-// Map of userId -> socket.id
-const activeUsers = new Map();
+const connectedUsers = new Map();
 
 io.on('connection', (socket) => {
-  console.log(`[Socket] Connected: ${socket.id}`);
+  console.log(`[Socket.io] Connected: ${socket.id}`);
 
-  // Register user ID (e.g., 'admin' or 'client_123')
-  socket.on('register', (data) => {
-    const userId = typeof data === 'object' ? data.userId : data;
-    if (userId) {
-      activeUsers.set(userId, socket.id);
-      socket.userId = userId;
-      console.log(`[Register] User '${userId}' registered on socket '${socket.id}'`);
-      console.log(`[Active Users]`, Array.from(activeUsers.keys()));
-    }
+  // 1. Register User Room
+  socket.on('register', (userId) => {
+    if (!userId) return;
+    socket.userId = userId;
+    socket.join(userId);
+    connectedUsers.set(userId, socket.id);
+    console.log(`[Socket.io] Registered User: ${userId} on Socket: ${socket.id}`);
   });
 
-  // Call Initiation
-  socket.on('call_user', (data) => {
-    console.log(`[Call] Incoming call request from ${data.callerId} to ${data.receiverId}`);
-    const receiverSocketId = activeUsers.get(data.receiverId);
-
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('incoming_call', {
-        callerId: data.callerId,
-        callerName: data.callerName || data.callerId,
-        isVideoCall: data.isVideoCall,
-      });
-      console.log(`[Call] Dispatched 'incoming_call' to ${data.receiverId} (${receiverSocketId})`);
-    } else {
-      console.log(`[Call] Target user '${data.receiverId}' is OFFLINE`);
-      socket.emit('user_offline', { receiverId: data.receiverId });
-    }
+  // 2. Real-Time Text Messaging
+  socket.on('send_message', (data) => {
+    console.log(`[Chat] ${data.senderId} -> ${data.receiverId}: ${data.text}`);
+    io.to(data.receiverId).emit('receive_message', data);
+    io.to(data.senderId).emit('receive_message', data);
   });
 
-  // Call Handshake Response
+  // 3. WebRTC Signaling - Initiate Call
+  socket.on('make_call', (data) => {
+    console.log(`[Call] Initiate from ${data.callerId} to ${data.receiverId} (Video: ${data.isVideoCall})`);
+    io.to(data.receiverId).emit('incoming_call', {
+      callerId: data.callerId,
+      receiverId: data.receiverId,
+      isVideoCall: data.isVideoCall,
+      callerName: data.callerName || data.callerId,
+    });
+  });
+
+  // 4. WebRTC Signaling - Accept Call
   socket.on('accept_call', (data) => {
-    const callerSocketId = activeUsers.get(data.callerId);
-    if (callerSocketId) {
-      io.to(callerSocketId).emit('call_accepted', data);
-      console.log(`[Call] ${data.receiverId} accepted call from ${data.callerId}`);
-    }
+    console.log(`[Call] Accepted by ${data.receiverId} for ${data.callerId}`);
+    io.to(data.callerId).emit('call_accepted', {
+      callerId: data.callerId,
+      receiverId: data.receiverId,
+    });
   });
 
+  // 5. WebRTC Signaling - Reject / End Call
   socket.on('reject_call', (data) => {
-    const callerSocketId = activeUsers.get(data.callerId);
-    if (callerSocketId) {
-      io.to(callerSocketId).emit('call_rejected', data);
-    }
+    console.log(`[Call] Rejected by ${data.receiverId}`);
+    io.to(data.callerId).emit('call_rejected', data);
   });
 
   socket.on('end_call', (data) => {
-    const targetSocketId = activeUsers.get(data.targetUser);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('call_ended', data);
+    console.log(`[Call] Ended by ${socket.userId} for ${data.targetUser}`);
+    if (data.targetUser) {
+      io.to(data.targetUser).emit('call_ended', { from: socket.userId });
     }
   });
 
-  // WebRTC Signaling Events
+  // 6. WebRTC SDP & ICE Candidate Exchange
   socket.on('offer', (data) => {
-    const targetSocketId = activeUsers.get(data.targetUser);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('offer', data);
-    }
+    console.log(`[WebRTC] Offer from ${socket.userId} -> ${data.targetUser}`);
+    io.to(data.targetUser).emit('offer', {
+      from: socket.userId,
+      offer: data.offer,
+    });
   });
 
   socket.on('answer', (data) => {
-    const targetSocketId = activeUsers.get(data.targetUser);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('answer', data);
-    }
+    console.log(`[WebRTC] Answer from ${socket.userId} -> ${data.targetUser}`);
+    io.to(data.targetUser).emit('answer', {
+      from: socket.userId,
+      answer: data.answer,
+    });
   });
 
   socket.on('ice_candidate', (data) => {
-    const targetSocketId = activeUsers.get(data.targetUser);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('ice_candidate', data);
-    }
+    io.to(data.targetUser).emit('ice_candidate', {
+      from: socket.userId,
+      candidate: data.candidate,
+    });
   });
 
   socket.on('disconnect', () => {
     if (socket.userId) {
-      activeUsers.delete(socket.userId);
-      console.log(`[Disconnect] User '${socket.userId}' unregistered`);
+      connectedUsers.delete(socket.userId);
+      console.log(`[Socket.io] Disconnected: ${socket.userId}`);
     }
   });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`VibeChat Signaling Server listening on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });

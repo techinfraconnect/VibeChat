@@ -31,10 +31,7 @@ class _AdminAppState extends State<AdminApp> {
       navigatorKey: adminNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: AdminChatScreen(
-        senderName: 'Admin',
-        socket: SocketService().socket,
-      ),
+      home: const AdminChatScreen(),
     );
   }
 }

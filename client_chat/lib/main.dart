@@ -32,10 +32,7 @@ class _ClientAppState extends State<ClientApp> {
       navigatorKey: clientNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.green),
-      home: ClientChatScreen(
-        senderName: 'Client',
-        socket: SocketService().socket,
-      ),
+      home: const ClientChatScreen(),
     );
   }
 }

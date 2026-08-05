@@ -1,17 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../services/socket_service.dart';
 import 'call_screen.dart';
 
 class ClientChatScreen extends StatefulWidget {
-  final String senderName;
-  final io.Socket socket;
-
-  const ClientChatScreen({
-    super.key,
-    required this.senderName,
-    required this.socket,
-  });
+  const ClientChatScreen({super.key});
 
   @override
   State<ClientChatScreen> createState() => _ClientChatScreenState();
@@ -20,64 +12,56 @@ class ClientChatScreen extends StatefulWidget {
 class _ClientChatScreenState extends State<ClientChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final List<Map<String, dynamic>> _messages = [];
+  final String _targetUser = 'admin';
 
   @override
   void initState() {
     super.initState();
-    _listenToChatMessages();
+    _setupSocketListeners();
   }
 
-  void _listenToChatMessages() {
-    widget.socket.on('receive_message', (data) {
-      if (mounted) {
-        setState(() {
-          _messages.add({
-            'sender': data['sender'] ?? 'Admin',
-            'message': data['message'] ?? '',
-            'isMe': false,
+  void _setupSocketListeners() {
+    final socket = SocketService().socket;
+    if (socket != null) {
+      socket.off('receive_message');
+      socket.on('receive_message', (data) {
+        if (mounted) {
+          setState(() {
+            _messages.add(Map<String, dynamic>.from(data));
           });
-        });
-      }
-    });
+        }
+      });
+    }
   }
 
   void _sendMessage() {
-    if (_messageController.text.trim().isEmpty) return;
-
     final text = _messageController.text.trim();
-    widget.socket.emit('send_message', {
-      'sender': widget.senderName,
-      'receiver': 'admin',
-      'message': text,
-    });
+    if (text.isEmpty) return;
 
-    setState(() {
-      _messages.add({
-        'sender': widget.senderName,
-        'message': text,
-        'isMe': true,
-      });
-    });
+    final messageData = {
+      'senderId': 'client_123',
+      'receiverId': _targetUser,
+      'text': text,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    };
 
+    SocketService().socket?.emit('send_message', messageData);
     _messageController.clear();
   }
 
-  void _startCall(bool isVideo) {
-    const String targetAdmin = 'admin';
+  void _startCall({required bool isVideoCall}) {
+    final socket = SocketService().socket;
+    if (socket == null) return;
 
-    // Emit socket trigger to wake up receiving admin
-    SocketService().initiateCall(receiverId: targetAdmin, isVideoCall: isVideo);
-
-    // Navigate Client to CallScreen
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => CallScreen(
-          callerName: widget.senderName,
-          targetUser: targetAdmin,
-          isVideoCall: isVideo,
+        builder: (_) => CallScreen(
+          callerName: 'client_123',
+          targetUser: _targetUser,
+          isVideoCall: isVideoCall,
           isCaller: true,
-          socket: widget.socket,
+          socket: socket,
         ),
       ),
     );
@@ -87,18 +71,15 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Client Chat'),
-        backgroundColor: Colors.green,
+        title: Text('Chat with Admin ($_targetUser)'),
         actions: [
           IconButton(
             icon: const Icon(Icons.phone),
-            tooltip: 'Audio Call',
-            onPressed: () => _startCall(false),
+            onPressed: () => _startCall(isVideoCall: false),
           ),
           IconButton(
             icon: const Icon(Icons.videocam),
-            tooltip: 'Video Call',
-            onPressed: () => _startCall(true),
+            onPressed: () => _startCall(isVideoCall: true),
           ),
         ],
       ),
@@ -106,27 +87,24 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.all(12.0),
+              padding: const EdgeInsets.all(16),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
-                final isMe = msg['isMe'] == true;
+                final isMe = msg['senderId'] == 'client_123';
                 return Align(
                   alignment: isMe
                       ? Alignment.centerRight
                       : Alignment.centerLeft,
                   child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4.0),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14.0,
-                      vertical: 10.0,
-                    ),
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: isMe ? Colors.green : Colors.grey[300],
-                      borderRadius: BorderRadius.circular(12.0),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
-                      msg['message'] ?? '',
+                      msg['text'] ?? '',
                       style: TextStyle(
                         color: isMe ? Colors.white : Colors.black,
                       ),
@@ -136,9 +114,8 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
               },
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-            color: Colors.white,
+          Padding(
+            padding: const EdgeInsets.all(8.0),
             child: Row(
               children: [
                 Expanded(
@@ -146,12 +123,12 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                     controller: _messageController,
                     decoration: const InputDecoration(
                       hintText: 'Type a message...',
-                      border: InputBorder.none,
+                      border: OutlineInputBorder(),
                     ),
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.send, color: Colors.green),
+                  icon: const Icon(Icons.send),
                   onPressed: _sendMessage,
                 ),
               ],

@@ -54,10 +54,17 @@ class _CallScreenState extends State<CallScreen> {
     await _createMediaStream();
     await _createPeerConnection();
 
-    if (!widget.isCaller) {
+    if (widget.isCaller) {
+      widget.socket.emit('make_call', {
+        'callerId': widget.callerName,
+        'receiverId': widget.targetUser,
+        'isVideoCall': widget.isVideoCall,
+        'callerName': widget.callerName,
+      });
+    } else {
       widget.socket.emit('accept_call', {
         'callerId': widget.targetUser,
-        'receiverId': 'client_123',
+        'receiverId': widget.callerName,
       });
     }
   }
@@ -65,7 +72,7 @@ class _CallScreenState extends State<CallScreen> {
   void _setupSocketListeners() {
     widget.socket.on('call_accepted', (data) async {
       if (widget.isCaller) {
-        debugPrint('[WebRTC] Call accepted by remote user. Creating offer...');
+        debugPrint('[WebRTC] Call accepted. Creating offer...');
         await _createOffer();
       }
     });
@@ -96,7 +103,7 @@ class _CallScreenState extends State<CallScreen> {
     widget.socket.on('ice_candidate', (data) async {
       if (_peerConnection != null) {
         final candidateData = data['candidate'];
-        if (candidateData != null) {
+        if (candidateData != null && candidateData['candidate'] != null) {
           final candidate = RTCIceCandidate(
             candidateData['candidate'],
             candidateData['sdpMid'],
@@ -115,7 +122,7 @@ class _CallScreenState extends State<CallScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Call was rejected')));
+        ).showSnackBar(const SnackBar(content: Text('Call rejected')));
         _endCallLocally();
       }
     });
@@ -243,7 +250,6 @@ class _CallScreenState extends State<CallScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // Remote Video View
             if (widget.isVideoCall)
               Positioned.fill(
                 child: _isCallConnected
@@ -254,8 +260,7 @@ class _CallScreenState extends State<CallScreen> {
                       )
                     : Center(
                         child: Column(
-                          mainAxisAlignment:
-                              MainAxisAlignment.center, // Fixed here
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             const CircularProgressIndicator(
                               color: Colors.white,
@@ -275,7 +280,7 @@ class _CallScreenState extends State<CallScreen> {
             else
               Center(
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center, // Fixed here
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const CircleAvatar(
                       radius: 50,
@@ -292,9 +297,7 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      _isCallConnected
-                          ? 'Audio Call In Progress'
-                          : 'Connecting...',
+                      _isCallConnected ? 'Call In Progress' : 'Connecting...',
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 16,
@@ -304,7 +307,6 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
 
-            // Local Video Preview (Picture in Picture)
             if (widget.isVideoCall && !_isCameraOff)
               Positioned(
                 top: 20,
@@ -326,7 +328,6 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
 
-            // Action Buttons
             Positioned(
               bottom: 30,
               left: 0,
