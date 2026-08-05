@@ -1,18 +1,14 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'call_screen.dart';
 import 'call_logs_screen.dart';
 
 class ClientChatScreen extends StatefulWidget {
-  final String senderName;
   final io.Socket socket;
 
-  const ClientChatScreen({
-    super.key,
-    required this.senderName,
-    required this.socket,
-  });
+  const ClientChatScreen({super.key, required this.socket});
 
   @override
   State<ClientChatScreen> createState() => _ClientChatScreenState();
@@ -20,6 +16,8 @@ class ClientChatScreen extends StatefulWidget {
 
 class _ClientChatScreenState extends State<ClientChatScreen> {
   final TextEditingController _messageController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
   List<Map<String, dynamic>> _messages = [];
   List<Map<String, dynamic>> _callLogs = [];
 
@@ -27,10 +25,34 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   bool _clientCanMute = true;
   bool _showCallLogsToClient = true;
 
+  String _clientName = "Client";
+  String _adminName = "Admin";
+
   @override
   void initState() {
     super.initState();
+    _loadNames();
     _setupSocketListeners();
+  }
+
+  Future<void> _loadNames() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _clientName = prefs.getString('client_name') ?? "Client";
+      _adminName = prefs.getString('admin_name') ?? "Admin";
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   void _setupSocketListeners() {
@@ -40,6 +62,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
     widget.socket.off('call_logs');
     widget.socket.off('call_logs_update');
     widget.socket.off('update_settings');
+    widget.socket.off('update_names');
     widget.socket.off('incoming_call');
     widget.socket.off('call_rejected');
 
@@ -48,6 +71,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       setState(() {
         _messages = List<Map<String, dynamic>>.from(data);
       });
+      _scrollToBottom();
     });
 
     widget.socket.on('receive_message', (data) {
@@ -55,6 +79,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       setState(() {
         _messages.add(Map<String, dynamic>.from(data));
       });
+      _scrollToBottom();
     });
 
     widget.socket.on('edit_message', (data) {
@@ -91,6 +116,21 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       });
     });
 
+    widget.socket.on('update_names', (data) async {
+      if (!mounted) return;
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        if (data['clientName'] != null) {
+          _clientName = data['clientName'];
+          prefs.setString('client_name', _clientName);
+        }
+        if (data['adminName'] != null) {
+          _adminName = data['adminName'];
+          prefs.setString('admin_name', _adminName);
+        }
+      });
+    });
+
     widget.socket.on('call_rejected', (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -103,7 +143,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      if (data['callerName'] == widget.senderName) return;
+      if (data['callerName'] == _clientName) return;
 
       setState(() {
         if (data['clientCanMute'] != null)
@@ -183,62 +223,44 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        children: [
-                          FloatingActionButton(
-                            heroTag: "decline_call",
-                            backgroundColor: const Color(0xFFFF3B30),
-                            onPressed: () {
-                              Navigator.pop(ctx);
-                              widget.socket.emit('call_rejected');
-                            },
-                            child: const Icon(
-                              Icons.call_end,
-                              color: Colors.white,
-                              size: 30,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            "Decline",
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
+                      FloatingActionButton(
+                        heroTag: "decline_call",
+                        backgroundColor: const Color(0xFFFF3B30),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          widget.socket.emit('call_rejected');
+                        },
+                        child: const Icon(
+                          Icons.call_end,
+                          color: Colors.white,
+                          size: 30,
+                        ),
                       ),
-                      Column(
-                        children: [
-                          FloatingActionButton(
-                            heroTag: "accept_call",
-                            backgroundColor: const Color(0xFF34C759),
-                            onPressed: () {
-                              Navigator.pop(ctx);
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => CallScreen(
-                                    callerName: data['callerName'],
-                                    targetUser: data['callerName'],
-                                    isVideoCall: data['isVideoCall'] ?? false,
-                                    isCaller: false,
-                                    socket: widget.socket,
-                                    clientCanMute: _clientCanMute,
-                                    isAdmin: false,
-                                  ),
-                                ),
-                              );
-                            },
-                            child: const Icon(
-                              Icons.call,
-                              color: Colors.white,
-                              size: 30,
+                      FloatingActionButton(
+                        heroTag: "accept_call",
+                        backgroundColor: const Color(0xFF34C759),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => CallScreen(
+                                callerName: _clientName,
+                                targetUser: _adminName,
+                                isVideoCall: data['isVideoCall'] ?? false,
+                                isCaller: false,
+                                socket: widget.socket,
+                                clientCanMute: _clientCanMute,
+                                isAdmin: false,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            "Accept",
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
+                          );
+                        },
+                        child: const Icon(
+                          Icons.call,
+                          color: Colors.white,
+                          size: 30,
+                        ),
                       ),
                     ],
                   ),
@@ -265,7 +287,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       _editingIndex = null;
     } else {
       final messageData = {
-        'sender': widget.senderName,
+        'sender': _clientName,
         'message': _messageController.text.trim(),
       };
       widget.socket.emit('send_message', messageData);
@@ -274,10 +296,11 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       });
     }
     _messageController.clear();
+    _scrollToBottom();
   }
 
   void _startEditing(int index) {
-    if (_messages[index]['sender'] == widget.senderName) {
+    if (_messages[index]['sender'] == _clientName) {
       setState(() {
         _editingIndex = index;
         _messageController.text = _messages[index]['message'];
@@ -287,7 +310,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
   void _initiateCall(bool isVideo) {
     widget.socket.emit('call_invite', {
-      'callerName': widget.senderName,
+      'callerName': _clientName,
       'isVideoCall': isVideo,
       'clientCanMute': _clientCanMute,
       'showCallLogsToClient': _showCallLogsToClient,
@@ -297,8 +320,8 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => CallScreen(
-          callerName: widget.senderName,
-          targetUser: "Admin",
+          callerName: _clientName,
+          targetUser: _adminName,
           isVideoCall: isVideo,
           isCaller: true,
           socket: widget.socket,
@@ -316,20 +339,25 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF1C1C1E),
         elevation: 0,
-        title: const Text(
-          "Client",
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        title: Text(
+          _clientName,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
-          // Conditionally render call logs icon based on Admin permission toggle
           if (_showCallLogsToClient)
             IconButton(
               icon: const Icon(Icons.history_rounded),
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => CallLogsScreen(callLogs: _callLogs),
+                  builder: (context) => CallLogsScreen(
+                    callLogs: _callLogs,
+                    onClearLogs: () => widget.socket.emit('clear_call_logs'),
+                  ),
                 ),
               ),
             ),
@@ -347,11 +375,12 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
+              controller: _scrollController,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
-                bool isMe = msg['sender'] == widget.senderName;
+                bool isMe = msg['sender'] == _clientName;
                 return GestureDetector(
                   onLongPress: () => _startEditing(index),
                   child: Align(

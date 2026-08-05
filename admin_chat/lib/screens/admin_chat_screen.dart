@@ -1,18 +1,14 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'call_screen.dart';
 import 'call_logs_screen.dart';
 
 class AdminChatScreen extends StatefulWidget {
-  final String senderName;
   final io.Socket socket;
 
-  const AdminChatScreen({
-    super.key,
-    required this.senderName,
-    required this.socket,
-  });
+  const AdminChatScreen({super.key, required this.socket});
 
   @override
   State<AdminChatScreen> createState() => _AdminChatScreenState();
@@ -20,6 +16,10 @@ class AdminChatScreen extends StatefulWidget {
 
 class _AdminChatScreenState extends State<AdminChatScreen> {
   final TextEditingController _messageController = TextEditingController();
+  final TextEditingController _adminNameController = TextEditingController();
+  final TextEditingController _clientNameController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
   List<Map<String, dynamic>> _messages = [];
   List<Map<String, dynamic>> _callLogs = [];
 
@@ -27,10 +27,50 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   bool _clientCanMute = true;
   bool _showCallLogsToClient = true;
 
+  String _adminName = "Admin";
+  String _clientName = "Client";
+
   @override
   void initState() {
     super.initState();
+    _loadNames();
     _setupSocketListeners();
+  }
+
+  Future<void> _loadNames() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _adminName = prefs.getString('admin_name') ?? "Admin";
+      _clientName = prefs.getString('client_name') ?? "Client";
+      _adminNameController.text = _adminName;
+      _clientNameController.text = _clientName;
+    });
+  }
+
+  Future<void> _saveNames(String admin, String client) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('admin_name', admin);
+    await prefs.setString('client_name', client);
+    setState(() {
+      _adminName = admin;
+      _clientName = client;
+    });
+    widget.socket.emit('update_names', {
+      'adminName': admin,
+      'clientName': client,
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   void _setupSocketListeners() {
@@ -39,6 +79,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     widget.socket.off('edit_message');
     widget.socket.off('call_logs');
     widget.socket.off('call_logs_update');
+    widget.socket.off('update_names');
     widget.socket.off('incoming_call');
     widget.socket.off('call_rejected');
 
@@ -47,6 +88,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       setState(() {
         _messages = List<Map<String, dynamic>>.from(data);
       });
+      _scrollToBottom();
     });
 
     widget.socket.on('receive_message', (data) {
@@ -54,6 +96,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       setState(() {
         _messages.add(Map<String, dynamic>.from(data));
       });
+      _scrollToBottom();
     });
 
     widget.socket.on('edit_message', (data) {
@@ -80,6 +123,21 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       });
     });
 
+    widget.socket.on('update_names', (data) async {
+      if (!mounted) return;
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        if (data['adminName'] != null) {
+          _adminName = data['adminName'];
+          prefs.setString('admin_name', _adminName);
+        }
+        if (data['clientName'] != null) {
+          _clientName = data['clientName'];
+          prefs.setString('client_name', _clientName);
+        }
+      });
+    });
+
     widget.socket.on('call_rejected', (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -92,7 +150,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      if (data['callerName'] == widget.senderName) return;
+      if (data['callerName'] == _adminName) return;
 
       if (data['clientCanMute'] != null) _clientCanMute = data['clientCanMute'];
       if (data['showCallLogsToClient'] != null)
@@ -169,62 +227,44 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        children: [
-                          FloatingActionButton(
-                            heroTag: "decline_call",
-                            backgroundColor: const Color(0xFFFF3B30),
-                            onPressed: () {
-                              Navigator.pop(ctx);
-                              widget.socket.emit('call_rejected');
-                            },
-                            child: const Icon(
-                              Icons.call_end,
-                              color: Colors.white,
-                              size: 30,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            "Decline",
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
+                      FloatingActionButton(
+                        heroTag: "decline_call",
+                        backgroundColor: const Color(0xFFFF3B30),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          widget.socket.emit('call_rejected');
+                        },
+                        child: const Icon(
+                          Icons.call_end,
+                          color: Colors.white,
+                          size: 30,
+                        ),
                       ),
-                      Column(
-                        children: [
-                          FloatingActionButton(
-                            heroTag: "accept_call",
-                            backgroundColor: const Color(0xFF34C759),
-                            onPressed: () {
-                              Navigator.pop(ctx);
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => CallScreen(
-                                    callerName: data['callerName'],
-                                    targetUser: data['callerName'],
-                                    isVideoCall: data['isVideoCall'] ?? false,
-                                    isCaller: false,
-                                    socket: widget.socket,
-                                    clientCanMute: _clientCanMute,
-                                    isAdmin: true,
-                                  ),
-                                ),
-                              );
-                            },
-                            child: const Icon(
-                              Icons.call,
-                              color: Colors.white,
-                              size: 30,
+                      FloatingActionButton(
+                        heroTag: "accept_call",
+                        backgroundColor: const Color(0xFF34C759),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => CallScreen(
+                                callerName: _adminName,
+                                targetUser: _clientName,
+                                isVideoCall: data['isVideoCall'] ?? false,
+                                isCaller: false,
+                                socket: widget.socket,
+                                clientCanMute: _clientCanMute,
+                                isAdmin: true,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            "Accept",
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
+                          );
+                        },
+                        child: const Icon(
+                          Icons.call,
+                          color: Colors.white,
+                          size: 30,
+                        ),
                       ),
                     ],
                   ),
@@ -251,7 +291,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       _editingIndex = null;
     } else {
       final messageData = {
-        'sender': widget.senderName,
+        'sender': _adminName,
         'message': _messageController.text.trim(),
       };
       widget.socket.emit('send_message', messageData);
@@ -260,10 +300,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       });
     }
     _messageController.clear();
+    _scrollToBottom();
   }
 
   void _startEditing(int index) {
-    if (_messages[index]['sender'] == widget.senderName) {
+    if (_messages[index]['sender'] == _adminName) {
       setState(() {
         _editingIndex = index;
         _messageController.text = _messages[index]['message'];
@@ -273,7 +314,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
   void _initiateCall(bool isVideo) {
     widget.socket.emit('call_invite', {
-      'callerName': widget.senderName,
+      'callerName': _adminName,
       'isVideoCall': isVideo,
       'clientCanMute': _clientCanMute,
       'showCallLogsToClient': _showCallLogsToClient,
@@ -283,8 +324,8 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => CallScreen(
-          callerName: widget.senderName,
-          targetUser: "Client",
+          callerName: _adminName,
+          targetUser: _clientName,
           isVideoCall: isVideo,
           isCaller: true,
           socket: widget.socket,
@@ -298,6 +339,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   void _openSettings() {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF1C1C1E),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -305,63 +347,119 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return Container(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "Admin Settings",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                left: 24,
+                right: 24,
+                top: 24,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Admin Settings",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Enable Client Mute Button",
-                        style: TextStyle(color: Colors.white70, fontSize: 16),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          "Enable Client Mute Button",
+                          style: TextStyle(color: Colors.white70, fontSize: 16),
+                        ),
+                        Switch(
+                          value: _clientCanMute,
+                          activeThumbColor: Colors.blue,
+                          onChanged: (val) {
+                            setModalState(() => _clientCanMute = val);
+                            setState(() {});
+                            widget.socket.emit('update_settings', {
+                              'clientCanMute': val,
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          "Show Call Logs to Client",
+                          style: TextStyle(color: Colors.white70, fontSize: 16),
+                        ),
+                        Switch(
+                          value: _showCallLogsToClient,
+                          activeThumbColor: Colors.blue,
+                          onChanged: (val) {
+                            setModalState(() => _showCallLogsToClient = val);
+                            setState(() {});
+                            widget.socket.emit('update_settings', {
+                              'showCallLogsToClient': val,
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const Divider(color: Colors.white24, height: 30),
+                    const Text(
+                      "Client Name",
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _clientNameController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: const Color(0xFF2C2C2E),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
                       ),
-                      Switch(
-                        value: _clientCanMute,
-                        activeThumbColor: Colors.blue,
-                        onChanged: (val) {
-                          setModalState(() => _clientCanMute = val);
-                          setState(() {});
-                          widget.socket.emit('update_settings', {
-                            'clientCanMute': val,
-                          });
-                        },
+                      onChanged: (val) {
+                        _saveNames(
+                          _adminNameController.text.trim(),
+                          val.trim(),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Admin Name",
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _adminNameController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: const Color(0xFF2C2C2E),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Show Call Logs to Client",
-                        style: TextStyle(color: Colors.white70, fontSize: 16),
-                      ),
-                      Switch(
-                        value: _showCallLogsToClient,
-                        activeThumbColor: Colors.blue,
-                        onChanged: (val) {
-                          setModalState(() => _showCallLogsToClient = val);
-                          setState(() {});
-                          widget.socket.emit('update_settings', {
-                            'showCallLogsToClient': val,
-                          });
-                        },
-                      ),
-                    ],
-                  ),
-                ],
+                      onChanged: (val) {
+                        _saveNames(
+                          val.trim(),
+                          _clientNameController.text.trim(),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 30),
+                  ],
+                ),
               ),
             );
           },
@@ -377,9 +475,12 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF1C1C1E),
         elevation: 0,
-        title: const Text(
-          "Admin",
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        title: Text(
+          _adminName,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
@@ -388,7 +489,10 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => CallLogsScreen(callLogs: _callLogs),
+                builder: (context) => CallLogsScreen(
+                  callLogs: _callLogs,
+                  onClearLogs: () => widget.socket.emit('clear_call_logs'),
+                ),
               ),
             ),
           ),
@@ -410,11 +514,12 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
+              controller: _scrollController,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
-                bool isMe = msg['sender'] == widget.senderName;
+                bool isMe = msg['sender'] == _adminName;
                 return GestureDetector(
                   onLongPress: () => _startEditing(index),
                   child: Align(

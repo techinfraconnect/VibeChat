@@ -6,14 +6,13 @@ const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 let clientCanMute = true;
 let showCallLogsToClient = true;
+let adminName = "Admin";
+let clientName = "Client";
 let chatHistory = [];       
 let callLogs = [];          
 let offlineMessages = [];   
@@ -21,16 +20,13 @@ let offlineMessages = [];
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
 
-  // Send current states & history to newly connected device
   socket.emit('update_settings', { clientCanMute, showCallLogsToClient });
+  socket.emit('update_names', { adminName, clientName });
   socket.emit('chat_history', chatHistory);
   socket.emit('call_logs', callLogs);
 
-  // Deliver any pending offline messages
   if (offlineMessages.length > 0) {
-    offlineMessages.forEach(msg => {
-      socket.emit('receive_message', msg);
-    });
+    offlineMessages.forEach(msg => socket.emit('receive_message', msg));
     offlineMessages = [];
   }
 
@@ -40,10 +36,14 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('update_settings', { clientCanMute, showCallLogsToClient });
   });
 
+  socket.on('update_names', (data) => {
+    if (data.adminName !== undefined) adminName = data.adminName;
+    if (data.clientName !== undefined) clientName = data.clientName;
+    io.emit('update_names', { adminName, clientName });
+  });
+
   socket.on('send_message', (data) => {
-    console.log(`✉️ Message sent by ${data.sender}`);
     chatHistory.push(data);
-    
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
     } else {
@@ -58,7 +58,6 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('edit_message', data);
   });
 
-  // Call Logs & Invites
   socket.on('call_invite', (data) => {
     data.clientCanMute = clientCanMute;
     data.showCallLogsToClient = showCallLogsToClient;
@@ -88,6 +87,11 @@ io.on('connection', (socket) => {
   socket.on('call_rejected', () => {
     if (callLogs.length > 0) callLogs[0].status = 'Declined';
     socket.broadcast.emit('call_rejected');
+    io.emit('call_logs_update', callLogs);
+  });
+
+  socket.on('clear_call_logs', () => {
+    callLogs = [];
     io.emit('call_logs_update', callLogs);
   });
 

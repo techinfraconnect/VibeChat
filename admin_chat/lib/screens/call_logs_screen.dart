@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 
 class CallLogsScreen extends StatelessWidget {
   final List<Map<String, dynamic>> callLogs;
+  final VoidCallback onClearLogs;
 
-  const CallLogsScreen({super.key, required this.callLogs});
+  const CallLogsScreen({
+    super.key,
+    required this.callLogs,
+    required this.onClearLogs,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -13,6 +18,50 @@ class CallLogsScreen extends StatelessWidget {
         backgroundColor: const Color(0xFF1C1C1E),
         title: const Text("Call Logs", style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          if (callLogs.isNotEmpty)
+            IconButton(
+              icon: const Icon(
+                Icons.delete_sweep_rounded,
+                color: Colors.redAccent,
+              ),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF1C1C1E),
+                    title: const Text(
+                      "Clear Call Logs",
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    content: const Text(
+                      "Are you sure you want to clear all call logs?",
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text(
+                          "Cancel",
+                          style: TextStyle(color: Colors.white54),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          onClearLogs();
+                        },
+                        child: const Text(
+                          "Clear",
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
       ),
       body: callLogs.isEmpty
           ? const Center(
@@ -31,9 +80,14 @@ class CallLogsScreen extends StatelessWidget {
                 Color statusColor = Colors.green;
                 if (isDeclined || isMissed) statusColor = Colors.red;
 
+                // Clean display without WhatsApp prefix
+                String callType = log['type'].contains('Video')
+                    ? 'Video Call'
+                    : 'Audio Call';
+
                 return ListTile(
                   leading: Icon(
-                    log['type'].contains('Video')
+                    callType.contains('Video')
                         ? Icons.videocam_rounded
                         : Icons.call_rounded,
                     color: statusColor,
@@ -46,7 +100,7 @@ class CallLogsScreen extends StatelessWidget {
                     ),
                   ),
                   subtitle: Text(
-                    "${log['type']} • ${log['dateTime']}",
+                    "$callType • ${log['dateTime']}",
                     style: const TextStyle(color: Colors.white54),
                   ),
                   trailing: Text(
