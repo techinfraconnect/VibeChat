@@ -1,33 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart';
-import 'services/socket_service.dart';
 import 'screens/client_chat_screen.dart';
+import 'services/socket_service.dart';
 
+// Create a global navigator key if needed, or simply let the app run.
 final GlobalKey<NavigatorState> clientNavigatorKey =
     GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  } catch (e) {
-    debugPrint('Firebase init warning: $e');
-  }
+  // Ensure you initialize Firebase if you are using it
+  // await Firebase.initializeApp();
 
-  SocketService().initSocket(
-    'client_123',
-    clientNavigatorKey,
-    serverUrl: 'http://10.0.2.2:3000',
-  );
+  // FIX 1: Pass only the username to initSocket
+  SocketService().initSocket('Client');
 
-  runApp(const ClientApp());
+  runApp(const ClientChatApp());
 }
 
-class ClientApp extends StatelessWidget {
-  const ClientApp({super.key});
+class ClientChatApp extends StatelessWidget {
+  const ClientChatApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -35,8 +27,12 @@ class ClientApp extends StatelessWidget {
       title: 'Client Chat',
       navigatorKey: clientNavigatorKey,
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(primarySwatch: Colors.green),
-      home: const ClientChatScreen(),
+      theme: ThemeData(primarySwatch: Colors.blue),
+      // FIX 2: Pass the required 'senderName' and 'socket' parameters
+      home: ClientChatScreen(
+        senderName: 'Client',
+        socket: SocketService().socket,
+      ),
     );
   }
 }
