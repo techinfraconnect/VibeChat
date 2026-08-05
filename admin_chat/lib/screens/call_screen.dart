@@ -23,211 +23,143 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
-  final _localRenderer = RTCVideoRenderer();
-  final _remoteRenderer = RTCVideoRenderer();
-
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
-
-  bool _isMuted = false;
-  bool _isCameraOff = false;
-  bool _isCallConnected = false;
-
-  final Map<String, dynamic> _configuration = {
-    'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-    ],
-  };
+  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
+  final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
+  bool _isConnecting = true;
 
   @override
   void initState() {
     super.initState();
-    _initRenderersAndWebRTC();
+    _initRenderers();
+    _initWebRTC();
   }
 
-  Future<void> _initRenderersAndWebRTC() async {
+  Future<void> _initRenderers() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
-
-    _setupSocketListeners();
-    await _createMediaStream();
-    await _createPeerConnection();
-
-    if (widget.isCaller) {
-      widget.socket.emit('make_call', {
-        'callerId': widget.callerName,
-        'receiverId': widget.targetUser,
-        'isVideoCall': widget.isVideoCall,
-        'callerName': widget.callerName,
-      });
-    } else {
-      widget.socket.emit('accept_call', {
-        'callerId': widget.targetUser,
-        'receiverId': widget.callerName,
-      });
-    }
   }
 
-  void _setupSocketListeners() {
-    widget.socket.on('call_accepted', (data) async {
-      if (widget.isCaller) {
-        debugPrint('[WebRTC] Call accepted. Creating offer...');
-        await _createOffer();
-      }
-    });
-
-    widget.socket.on('offer', (data) async {
-      if (!widget.isCaller && _peerConnection != null) {
-        debugPrint('[WebRTC] Offer received. Setting remote description...');
-        final sdp = data['offer']['sdp'];
-        final type = data['offer']['type'];
-        await _peerConnection!.setRemoteDescription(
-          RTCSessionDescription(sdp, type),
-        );
-        await _createAnswer();
-      }
-    });
-
-    widget.socket.on('answer', (data) async {
-      if (widget.isCaller && _peerConnection != null) {
-        debugPrint('[WebRTC] Answer received. Setting remote description...');
-        final sdp = data['answer']['sdp'];
-        final type = data['answer']['type'];
-        await _peerConnection!.setRemoteDescription(
-          RTCSessionDescription(sdp, type),
-        );
-      }
-    });
-
-    widget.socket.on('ice_candidate', (data) async {
-      if (_peerConnection != null) {
-        final candidateData = data['candidate'];
-        if (candidateData != null && candidateData['candidate'] != null) {
-          final candidate = RTCIceCandidate(
-            candidateData['candidate'],
-            candidateData['sdpMid'],
-            candidateData['sdpMLineIndex'],
-          );
-          await _peerConnection!.addCandidate(candidate);
-        }
-      }
-    });
-
-    widget.socket.on('call_ended', (_) {
-      _endCallLocally();
-    });
-
-    widget.socket.on('call_rejected', (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Call rejected')));
-        _endCallLocally();
-      }
-    });
-  }
-
-  Future<void> _createMediaStream() async {
-    final mediaConstraints = {
+  Future<void> _initWebRTC() async {
+    // 1. Get Local Media (Camera & Mic)
+    _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
-      'video': widget.isVideoCall
-          ? {'facingMode': 'user', 'width': 640, 'height': 480}
-          : false,
+      'video': widget.isVideoCall ? {'facingMode': 'user'} : false,
+    });
+    _localRenderer.srcObject = _localStream;
+
+    // 2. Setup Peer Connection with Public Google STUN Servers
+    // This is strictly required for the Emulator and Phone to find each other over the internet.
+    Map<String, dynamic> configuration = {
+      "iceServers": [
+        {"urls": "stun:stun.l.google.com:19302"},
+        {"urls": "stun:stun1.l.google.com:19302"},
+        {"urls": "stun:stun2.l.google.com:19302"},
+      ],
     };
 
-    _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-    _localRenderer.srcObject = _localStream;
-    if (mounted) setState(() {});
-  }
+    _peerConnection = await createPeerConnection(configuration);
 
-  Future<void> _createPeerConnection() async {
-    _peerConnection = await createPeerConnection(_configuration);
-
+    // 3. Add local tracks to WebRTC connection
     _localStream?.getTracks().forEach((track) {
       _peerConnection?.addTrack(track, _localStream!);
     });
 
-    _peerConnection?.onIceCandidate = (candidate) {
-      if (candidate.candidate != null) {
-        widget.socket.emit('ice_candidate', {
-          'targetUser': widget.targetUser,
-          'candidate': {
-            'candidate': candidate.candidate,
-            'sdpMid': candidate.sdpMid,
-            'sdpMLineIndex': candidate.sdpMLineIndex,
-          },
+    // 4. Listen for incoming remote media
+    _peerConnection?.onTrack = (RTCTrackEvent event) {
+      if (event.streams.isNotEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _remoteRenderer.srcObject = event.streams[0];
+          _isConnecting = false; // Media stream established!
         });
       }
     };
 
-    _peerConnection?.onTrack = (event) {
-      if (event.track.kind == 'video' || event.track.kind == 'audio') {
-        if (event.streams.isNotEmpty) {
-          _remoteRenderer.srcObject = event.streams[0];
-          if (mounted) {
-            setState(() {
-              _isCallConnected = true;
-            });
-          }
-        }
-      }
+    // 5. Send ICE network candidates to the other device
+    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+      widget.socket.emit('ice-candidate', {
+        'candidate': candidate.candidate,
+        'sdpMid': candidate.sdpMid,
+        'sdpMLineIndex': candidate.sdpMLineIndex,
+      });
     };
-  }
 
-  Future<void> _createOffer() async {
-    if (_peerConnection == null) return;
-    RTCSessionDescription offer = await _peerConnection!.createOffer();
-    await _peerConnection!.setLocalDescription(offer);
+    // 6. Register Socket WebRTC Listeners
+    _setupSocketListeners();
 
-    widget.socket.emit('offer', {
-      'targetUser': widget.targetUser,
-      'offer': {'sdp': offer.sdp, 'type': offer.type},
-    });
-  }
-
-  Future<void> _createAnswer() async {
-    if (_peerConnection == null) return;
-    RTCSessionDescription answer = await _peerConnection!.createAnswer();
-    await _peerConnection!.setLocalDescription(answer);
-
-    widget.socket.emit('answer', {
-      'targetUser': widget.targetUser,
-      'answer': {'sdp': answer.sdp, 'type': answer.type},
-    });
-  }
-
-  void _toggleMute() {
-    if (_localStream != null) {
-      final audioTrack = _localStream!.getAudioTracks().firstOrNull;
-      if (audioTrack != null) {
-        _isMuted = !_isMuted;
-        audioTrack.enabled = !_isMuted;
-        setState(() {});
-      }
+    // 7. PREVENT RACE CONDITION:
+    // Now that we are fully listening, tell the server the receiver is actually ready.
+    if (!widget.isCaller) {
+      widget.socket.emit('call_accepted');
     }
   }
 
-  void _toggleCamera() {
-    if (_localStream != null && widget.isVideoCall) {
-      final videoTrack = _localStream!.getVideoTracks().firstOrNull;
-      if (videoTrack != null) {
-        _isCameraOff = !_isCameraOff;
-        videoTrack.enabled = !_isCameraOff;
-        setState(() {});
+  void _setupSocketListeners() {
+    // CALLER gets this to initiate the Offer
+    widget.socket.on('call_ready_for_offer', (_) async {
+      if (widget.isCaller && _peerConnection != null) {
+        RTCSessionDescription offer = await _peerConnection!.createOffer();
+        await _peerConnection!.setLocalDescription(offer);
+        widget.socket.emit('offer', {'sdp': offer.sdp, 'type': offer.type});
       }
-    }
+    });
+
+    // RECEIVER gets Offer, creates Answer
+    widget.socket.on('offer', (data) async {
+      if (!widget.isCaller && _peerConnection != null) {
+        await _peerConnection!.setRemoteDescription(
+          RTCSessionDescription(data['sdp'], data['type']),
+        );
+        RTCSessionDescription answer = await _peerConnection!.createAnswer();
+        await _peerConnection!.setLocalDescription(answer);
+        widget.socket.emit('answer', {'sdp': answer.sdp, 'type': answer.type});
+      }
+    });
+
+    // CALLER gets Answer
+    widget.socket.on('answer', (data) async {
+      if (widget.isCaller && _peerConnection != null) {
+        await _peerConnection!.setRemoteDescription(
+          RTCSessionDescription(data['sdp'], data['type']),
+        );
+      }
+    });
+
+    // BOTH exchange network candidates
+    widget.socket.on('ice-candidate', (data) async {
+      if (data['candidate'] != null && _peerConnection != null) {
+        await _peerConnection!.addCandidate(
+          RTCIceCandidate(
+            data['candidate'],
+            data['sdpMid'],
+            data['sdpMLineIndex'],
+          ),
+        );
+      }
+    });
+
+    widget.socket.on('end-call', (_) => _endCallLocally());
+    widget.socket.on('call_rejected', (_) => _endCallLocally());
   }
 
-  void _hangUp() {
-    widget.socket.emit('end_call', {'targetUser': widget.targetUser});
+  void _endCall() {
+    widget.socket.emit('end-call');
     _endCallLocally();
   }
 
   void _endCallLocally() {
     _localStream?.getTracks().forEach((track) => track.stop());
     _peerConnection?.close();
-    _peerConnection = null;
+
+    // Purge listeners so they don't fire multiple times on the next call
+    widget.socket.off('call_ready_for_offer');
+    widget.socket.off('offer');
+    widget.socket.off('answer');
+    widget.socket.off('ice-candidate');
+    widget.socket.off('end-call');
+    widget.socket.off('call_rejected');
 
     if (mounted) {
       Navigator.pop(context);
@@ -238,8 +170,6 @@ class _CallScreenState extends State<CallScreen> {
   void dispose() {
     _localRenderer.dispose();
     _remoteRenderer.dispose();
-    _localStream?.dispose();
-    _peerConnection?.dispose();
     super.dispose();
   }
 
@@ -247,126 +177,98 @@ class _CallScreenState extends State<CallScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            if (widget.isVideoCall)
-              Positioned.fill(
-                child: _isCallConnected
-                    ? RTCVideoView(
-                        _remoteRenderer,
-                        objectFit:
-                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                      )
-                    : Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const CircularProgressIndicator(
-                              color: Colors.white,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Calling ${widget.targetUser}...',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-              )
-            else
-              Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CircleAvatar(
-                      radius: 50,
-                      child: Icon(Icons.person, size: 50),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      widget.targetUser,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _isCallConnected ? 'Call In Progress' : 'Connecting...',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            if (widget.isVideoCall && !_isCameraOff)
-              Positioned(
-                top: 20,
-                right: 20,
-                width: 120,
-                height: 160,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: RTCVideoView(
-                    _localRenderer,
-                    mirror: true,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  ),
-                ),
-              ),
-
-            Positioned(
-              bottom: 30,
-              left: 0,
-              right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      body: Stack(
+        children: [
+          // Remote Media (Fullscreen)
+          if (!_isConnecting && widget.isVideoCall)
+            RTCVideoView(
+              _remoteRenderer,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            )
+          else
+            Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  FloatingActionButton(
-                    heroTag: 'admin_mute',
-                    onPressed: _toggleMute,
-                    backgroundColor: _isMuted ? Colors.white : Colors.white24,
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: Colors.indigo[200],
                     child: Icon(
-                      _isMuted ? Icons.mic_off : Icons.mic,
-                      color: _isMuted ? Colors.black : Colors.white,
+                      Icons.person,
+                      size: 50,
+                      color: Colors.indigo[800],
                     ),
                   ),
-                  FloatingActionButton(
-                    heroTag: 'admin_hangup',
-                    onPressed: _hangUp,
-                    backgroundColor: Colors.red,
-                    child: const Icon(Icons.call_end, color: Colors.white),
-                  ),
-                  if (widget.isVideoCall)
-                    FloatingActionButton(
-                      heroTag: 'admin_cam',
-                      onPressed: _toggleCamera,
-                      backgroundColor: _isCameraOff
-                          ? Colors.white
-                          : Colors.white24,
-                      child: Icon(
-                        _isCameraOff ? Icons.videocam_off : Icons.videocam,
-                        color: _isCameraOff ? Colors.black : Colors.white,
-                      ),
+                  const SizedBox(height: 20),
+                  Text(
+                    widget.targetUser,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _isConnecting
+                        ? "Connecting WebRTC..."
+                        : (widget.isVideoCall
+                              ? "Video Paused"
+                              : "Audio Call Active"),
+                    style: const TextStyle(color: Colors.white70, fontSize: 16),
+                  ),
                 ],
               ),
             ),
-          ],
-        ),
+
+          // Local Media (Picture-in-Picture)
+          if (!_isConnecting && widget.isVideoCall)
+            Positioned(
+              right: 20,
+              top: 40,
+              child: Container(
+                width: 100,
+                height: 150,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.white, width: 2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: RTCVideoView(_localRenderer, mirror: true),
+                ),
+              ),
+            ),
+
+          // Controls
+          Positioned(
+            bottom: 50,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                FloatingActionButton(
+                  heroTag: "mute_btn",
+                  backgroundColor: Colors.grey[800],
+                  onPressed: () {
+                    if (_localStream != null) {
+                      bool enabled = _localStream!.getAudioTracks()[0].enabled;
+                      _localStream!.getAudioTracks()[0].enabled = !enabled;
+                    }
+                  },
+                  child: const Icon(Icons.mic, color: Colors.white),
+                ),
+                FloatingActionButton(
+                  heroTag: "end_btn",
+                  backgroundColor: Colors.red,
+                  onPressed: _endCall,
+                  child: const Icon(Icons.call_end, color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

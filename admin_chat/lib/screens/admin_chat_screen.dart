@@ -31,7 +31,9 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     widget.socket.off('incoming_call');
 
     widget.socket.on('receive_message', (data) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _messages.add(Map<String, dynamic>.from(data));
       });
@@ -43,7 +45,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
         return;
       }
       if (data['callerName'] == widget.senderName) {
-        return;
+        return; // Prevent self-calling echo
       }
       _showIncomingCallDialog(Map<String, dynamic>.from(data));
     });
@@ -68,8 +70,13 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
           ),
           ElevatedButton(
             onPressed: () {
+              // 1. Close the dialog
               Navigator.pop(ctx);
-              widget.socket.emit('call_accepted');
+
+              // 2. We DO NOT emit 'call_accepted' here anymore.
+              // The CallScreen will handle it once the media is ready.
+
+              // 3. Open the call screen
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -100,7 +107,6 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.emit('send_message', messageData);
 
-    // Add locally to the screen instantly
     setState(() {
       _messages.add(messageData);
     });
@@ -118,7 +124,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => CallScreen(
-          callerName: "Client",
+          callerName: widget.senderName,
           targetUser: "Client",
           isVideoCall: isVideo,
           isCaller: true,
@@ -132,7 +138,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Admin Panel"),
+        title: const Text("Admin Panel"),
         actions: [
           IconButton(
             icon: const Icon(Icons.call),
