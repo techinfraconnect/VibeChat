@@ -201,7 +201,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                       ),
                       Switch(
                         value: _clientCanMute,
-                        activeColor: Colors.blue,
+                        activeThumbColor: Colors.blue,
                         onChanged: (val) {
                           setModalState(() {
                             _clientCanMute = val;
