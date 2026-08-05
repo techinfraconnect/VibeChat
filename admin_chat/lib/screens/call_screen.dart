@@ -10,7 +10,7 @@ class CallScreen extends StatefulWidget {
   final bool isCaller;
   final io.Socket socket;
   final bool clientCanMute;
-  final bool isAdmin; // Identifies if this device belongs to the admin
+  final bool isAdmin;
 
   const CallScreen({
     super.key,
@@ -174,13 +174,12 @@ class _CallScreenState extends State<CallScreen> {
       }
     });
 
-    // Listen to admin toggle changes in real-time
     widget.socket.on('update_settings', (data) {
       if (!mounted) return;
       setState(() {
         _canMute = data['clientCanMute'] ?? true;
         if (!widget.isAdmin && !_canMute && _isMuted) {
-          _toggleMute(); // Force unmute if restriction is applied while muted
+          _toggleMute();
         }
       });
     });
@@ -197,7 +196,6 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _toggleMute() async {
-    // If client and admin turned off mute capability, prevent action
     if (!widget.isAdmin && !_canMute) return;
 
     if (_localStream != null && _localStream!.getAudioTracks().isNotEmpty) {
@@ -265,7 +263,6 @@ class _CallScreenState extends State<CallScreen> {
       _pipLeft = screenWidth - 130.0;
     }
 
-    // Determine if mute button should show: Admins always see it. Clients see it only if widget.isAdmin is false AND _canMute is true.
     bool showMuteButton = widget.isAdmin || _canMute;
 
     return Scaffold(
@@ -413,7 +410,6 @@ class _CallScreenState extends State<CallScreen> {
                           const SizedBox(width: 16),
                         ],
 
-                        // Dynamically show/hide Mute button based on Admin toggle rule
                         if (showMuteButton) ...[
                           _buildGlassButton(
                             icon: _isMuted

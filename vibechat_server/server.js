@@ -25,7 +25,7 @@ io.on('connection', (socket) => {
   socket.on('update_settings', (data) => {
     clientCanMute = data.clientCanMute;
     console.log(`⚙️ Settings updated by admin: clientCanMute = ${clientCanMute}`);
-    // Broadcast setting change instantly to all other clients
+    // Broadcast setting change instantly to all other connected apps
     socket.broadcast.emit('update_settings', { clientCanMute });
   });
 
@@ -43,7 +43,7 @@ io.on('connection', (socket) => {
   // --- CALL HANDSHAKE ---
   socket.on('call_invite', (data) => {
     console.log(`🔔 Call invite triggered by: ${data.callerName}`);
-    // Ensure the invite passes along the current mute setting state
+    // Ensure the invite passes along the active mute setting state
     data.clientCanMute = clientCanMute;
     socket.broadcast.emit('incoming_call', data);
   });
