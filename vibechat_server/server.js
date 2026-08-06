@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 
+// Initialize Firebase Admin securely via environment variables or local key file
 let serviceAccount;
 if (process.env.FIREBASE_CONFIG_JSON) {
   serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
@@ -28,7 +29,7 @@ let clientName = "Client";
 let chatHistory = [];       
 let callLogs = [];          
 let offlineMessages = [];   
-let registeredTokens = {}; 
+let registeredTokens = {}; // Stores FCM device tokens by role ('admin' or 'client')
 
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
@@ -43,6 +44,7 @@ io.on('connection', (socket) => {
     offlineMessages = [];
   }
 
+  // Register device FCM token for push notifications
   socket.on('register_fcm_token', (data) => {
     if (data.role && data.token) {
       registeredTokens[data.role] = data.token;
@@ -66,6 +68,7 @@ io.on('connection', (socket) => {
     chatHistory.push(data);
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
+      // Send Push Notification if recipient is offline
       const targetRole = (data.sender === adminName) ? 'client' : 'admin';
       sendPushNotification(targetRole, `New Message from ${data.sender}`, data.message);
     } else {
@@ -99,6 +102,7 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('incoming_call', data);
     io.emit('call_logs_update', callLogs);
 
+    // Send Push Notification for incoming call
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
     sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`);
   });
@@ -130,6 +134,7 @@ io.on('connection', (socket) => {
   });
 });
 
+// Helper function to dispatch FCM push notifications
 function sendPushNotification(role, title, body) {
   const token = registeredTokens[role];
   if (!token) return;
