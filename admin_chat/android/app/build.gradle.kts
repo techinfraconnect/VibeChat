@@ -7,6 +7,13 @@ plugins {
 android {
     namespace = "com.vibechat.admin_chat"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
+    }
 
     defaultConfig {
         applicationId = "com.vibechat.admin_chat"
@@ -14,11 +21,6 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildTypes {
@@ -34,4 +36,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }

@@ -55,6 +55,7 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
       <String, dynamic>{
         'transports': ['websocket'],
         'autoConnect': false,
+        'timeout': 10000,
       },
     );
 
@@ -62,16 +63,33 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
 
     socket.onConnect((_) {
       print('🟢 Connected to server successfully!');
-      setState(() {
-        isConnected = true;
-      });
+      if (mounted) {
+        setState(() {
+          isConnected = true;
+        });
+      }
       _initializePushNotifications();
     });
 
+    socket.onConnectError((err) => print('❌ Connect Error: $err'));
+    socket.onError((err) => print('❌ Error: $err'));
+
     socket.onDisconnect((_) {
-      setState(() {
-        isConnected = false;
-      });
+      if (mounted) {
+        setState(() {
+          isConnected = false;
+        });
+      }
+    });
+
+    // Fallback timer to prevent hanging on splash screen if server is spinning up
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!isConnected && mounted) {
+        print('⚠️ Connection timeout reached, forcing entry to chat screen.');
+        setState(() {
+          isConnected = true;
+        });
+      }
     });
   }
 
