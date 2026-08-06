@@ -119,8 +119,11 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
   });
 
-  // Bug Fix: Handle call cancellation when caller cuts the call before pickup
+  // Critical fix: Broadcast call cancellation when caller hangs up during ringing
   socket.on('cancel_call', () => {
+    if (callLogs.length > 0 && callLogs[0].status === 'Missed') {
+      callLogs[0].status = 'Cancelled';
+    }
     socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
   });

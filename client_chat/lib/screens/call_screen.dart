@@ -59,9 +59,19 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _initWebRTC() async {
+    // Pro optimization: Fix video lag by constraining resolution and framerate
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
-      'video': widget.isVideoCall ? {'facingMode': 'user'} : false,
+      'video': widget.isVideoCall
+          ? {
+              'mandatory': {
+                'minWidth': '640',
+                'minHeight': '480',
+                'minFrameRate': '30',
+              },
+              'facingMode': 'user',
+            }
+          : false,
     });
     _localRenderer.srcObject = _localStream;
 
@@ -185,9 +195,9 @@ class _CallScreenState extends State<CallScreen> {
       });
     });
 
-    // Bulletproof listeners to immediately dismiss call screen on end/reject
     widget.socket.on('end-call', (_) => _endCallLocally());
     widget.socket.on('call_rejected', (_) => _endCallLocally());
+    widget.socket.on('cancel_call', (_) => _endCallLocally());
   }
 
   void _processCandidateQueue() {
@@ -232,9 +242,8 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _endCall() {
-    widget.socket.emit(
-      'cancel_call',
-    ); // Emits cancellation to recipient if ringing
+    // Crucial: Send cancel_call so recipient popup ringing screen closes immediately
+    widget.socket.emit('cancel_call');
     widget.socket.emit('end-call');
     _endCallLocally();
   }
@@ -255,6 +264,7 @@ class _CallScreenState extends State<CallScreen> {
     widget.socket.off('update_settings');
     widget.socket.off('end-call');
     widget.socket.off('call_rejected');
+    widget.socket.off('cancel_call');
 
     if (mounted) {
       Navigator.of(context).pop();
@@ -276,6 +286,7 @@ class _CallScreenState extends State<CallScreen> {
     widget.socket.off('update_settings');
     widget.socket.off('end-call');
     widget.socket.off('call_rejected');
+    widget.socket.off('cancel_call');
 
     _localRenderer.dispose();
     _remoteRenderer.dispose();

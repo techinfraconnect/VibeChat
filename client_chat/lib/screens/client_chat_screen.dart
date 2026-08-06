@@ -167,7 +167,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       );
     });
 
-    // Bug Fix: Automatically dismiss incoming ringing dialog if caller cancels before pickup
     widget.socket.on('cancel_call', (_) {
       if (_activeCallDialogContext != null) {
         Navigator.of(_activeCallDialogContext!).pop();
@@ -177,17 +176,13 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      if (data['callerName'] == _clientName) {
-        return;
-      }
+      if (data['callerName'] == _clientName) return;
 
       setState(() {
-        if (data['clientCanMute'] != null) {
+        if (data['clientCanMute'] != null)
           _clientCanMute = data['clientCanMute'];
-        }
-        if (data['showCallLogsToClient'] != null) {
+        if (data['showCallLogsToClient'] != null)
           _showCallLogsToClient = data['showCallLogsToClient'];
-        }
       });
 
       _showFaceTimeCallDialog(Map<String, dynamic>.from(data));
