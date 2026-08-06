@@ -5,10 +5,20 @@ const admin = require('firebase-admin');
 
 // Initialize Firebase Admin securely via environment variables or local key file
 let serviceAccount;
-if (process.env.FIREBASE_CONFIG_JSON) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
-} else {
-  serviceAccount = require('./serviceAccountKey.json');
+
+try {
+  if (process.env.FIREBASE_CONFIG_JSON) {
+    let rawConfig = process.env.FIREBASE_CONFIG_JSON.trim();
+    if (rawConfig.startsWith('"') && rawConfig.endsWith('"')) {
+      rawConfig = rawConfig.slice(1, -1);
+    }
+    serviceAccount = JSON.parse(rawConfig);
+  } else {
+    serviceAccount = require('./serviceAccountKey.json');
+  }
+} catch (error) {
+  console.error("❌ Failed to parse FIREBASE_CONFIG_JSON:", error);
+  process.exit(1);
 }
 
 admin.initializeApp({
