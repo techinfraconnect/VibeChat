@@ -3,27 +3,29 @@ const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 
-// Initialize Firebase Admin securely via environment variables or local key file
-let serviceAccount;
-
-try {
-  if (process.env.FIREBASE_CONFIG_JSON) {
-    let rawConfig = process.env.FIREBASE_CONFIG_JSON.trim();
-    if (rawConfig.startsWith('"') && rawConfig.endsWith('"')) {
-      rawConfig = rawConfig.slice(1, -1);
-    }
-    serviceAccount = JSON.parse(rawConfig);
-  } else {
-    serviceAccount = require('./serviceAccountKey.json');
+// Professional initialization: Check for Render/Production environment variables or local key file
+if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      // Fixes private key newline formatting issues automatically in cloud environments
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    })
+  });
+  console.log("🔥 Firebase initialized using Individual Environment Variables.");
+} else {
+  try {
+    const serviceAccount = require('./serviceAccountKey.json');
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("🔥 Firebase initialized using local serviceAccountKey.json.");
+  } catch (error) {
+    console.error("❌ CRITICAL: Firebase credentials not found! Set environment variables or provide serviceAccountKey.json.");
+    process.exit(1);
   }
-} catch (error) {
-  console.error("❌ Failed to parse FIREBASE_CONFIG_JSON:", error);
-  process.exit(1);
 }
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
 
 const app = express();
 const server = http.createServer(app);
@@ -39,7 +41,7 @@ let clientName = "Client";
 let chatHistory = [];       
 let callLogs = [];          
 let offlineMessages = [];   
-let registeredTokens = {}; // Stores FCM device tokens by role ('admin' or 'client')
+let registeredTokens = {}; 
 
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
@@ -54,7 +56,6 @@ io.on('connection', (socket) => {
     offlineMessages = [];
   }
 
-  // Register device FCM token for push notifications
   socket.on('register_fcm_token', (data) => {
     if (data.role && data.token) {
       registeredTokens[data.role] = data.token;
@@ -78,7 +79,6 @@ io.on('connection', (socket) => {
     chatHistory.push(data);
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
-      // Send Push Notification if recipient is offline
       const targetRole = (data.sender === adminName) ? 'client' : 'admin';
       sendPushNotification(targetRole, `New Message from ${data.sender}`, data.message);
     } else {
@@ -112,7 +112,6 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('incoming_call', data);
     io.emit('call_logs_update', callLogs);
 
-    // Send Push Notification for incoming call
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
     sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`);
   });
@@ -140,11 +139,10 @@ io.on('connection', (socket) => {
   socket.on('end-call', () => socket.broadcast.emit('end-call'));
 
   socket.on('disconnect', () => {
-    console.log(`🔴 DEVICE DISCONNECTED: ${socket.id}`);
+    console.log(`🟢 DEVICE DISCONNECTED: ${socket.id}`);
   });
 });
 
-// Helper function to dispatch FCM push notifications
 function sendPushNotification(role, title, body) {
   const token = registeredTokens[role];
   if (!token) return;
