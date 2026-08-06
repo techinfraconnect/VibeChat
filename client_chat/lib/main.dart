@@ -6,14 +6,20 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'screens/client_chat_screen.dart';
 
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
   print("Handling a background message: ${message.messageId}");
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    print("⚠️ Firebase initialization error: $e");
+  }
   runApp(const ClientApp());
 }
 
@@ -82,10 +88,11 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
       }
     });
 
-    // Fallback timer to prevent hanging on splash screen if server is spinning up
-    Future.delayed(const Duration(seconds: 5), () {
+    // Fallback timer: forces entry to the chat screen after 4 seconds
+    // so the app never hangs indefinitely if the Render server is waking up.
+    Future.delayed(const Duration(seconds: 4), () {
       if (!isConnected && mounted) {
-        print('⚠️ Connection timeout reached, forcing entry to chat screen.');
+        print('⚠️ Connection timeout reached, forcing entry to client screen.');
         setState(() {
           isConnected = true;
         });
@@ -94,30 +101,36 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
   }
 
   void _initializePushNotifications() async {
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
+    try {
+      FirebaseMessaging messaging = FirebaseMessaging.instance;
 
-    NotificationSettings settings = await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+      NotificationSettings settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
 
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      print('User granted notification permissions.');
-    } else {
-      print('User declined or did not accept permission.');
-      return;
+      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+        print('User granted notification permissions.');
+      } else {
+        print('User declined or did not accept permission.');
+        return;
+      }
+
+      String? token = await messaging.getToken();
+      if (token != null) {
+        print('📱 FCM Token retrieved: $token');
+        socket.emit('register_fcm_token', {'role': userRole, 'token': token});
+      }
+
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        print(
+          'Foreground notification received: ${message.notification?.title}',
+        );
+      });
+    } catch (e) {
+      print("⚠️ Push notification initialization failed: $e");
     }
-
-    String? token = await messaging.getToken();
-    if (token != null) {
-      print('📱 FCM Token retrieved: $token');
-      socket.emit('register_fcm_token', {'role': userRole, 'token': token});
-    }
-
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print('Foreground notification received: ${message.notification?.title}');
-    });
   }
 
   @override

@@ -6,14 +6,20 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'screens/admin_chat_screen.dart';
 
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
   print("Handling a background message: ${message.messageId}");
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    print("⚠️ Firebase initialization error: $e");
+  }
   runApp(const AdminApp());
 }
 
@@ -82,8 +88,8 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
       }
     });
 
-    // Fallback timer to prevent hanging on splash screen if server is spinning up
-    Future.delayed(const Duration(seconds: 5), () {
+    // Fallback timer: forces entry to the admin screen after 4 seconds
+    Future.delayed(const Duration(seconds: 4), () {
       if (!isConnected && mounted) {
         print('⚠️ Connection timeout reached, forcing entry to admin screen.');
         setState(() {
@@ -94,32 +100,36 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
   }
 
   void _initializePushNotifications() async {
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
+    try {
+      FirebaseMessaging messaging = FirebaseMessaging.instance;
 
-    NotificationSettings settings = await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
-
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      print('Admin granted notification permissions.');
-    } else {
-      print('Admin declined or did not accept permission.');
-      return;
-    }
-
-    String? token = await messaging.getToken();
-    if (token != null) {
-      print('📱 Admin FCM Token retrieved: $token');
-      socket.emit('register_fcm_token', {'role': userRole, 'token': token});
-    }
-
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print(
-        'Foreground notification received for Admin: ${message.notification?.title}',
+      NotificationSettings settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
       );
-    });
+
+      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+        print('Admin granted notification permissions.');
+      } else {
+        print('Admin declined or did not accept permission.');
+        return;
+      }
+
+      String? token = await messaging.getToken();
+      if (token != null) {
+        print('📱 Admin FCM Token retrieved: $token');
+        socket.emit('register_fcm_token', {'role': userRole, 'token': token});
+      }
+
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        print(
+          'Foreground notification received for Admin: ${message.notification?.title}',
+        );
+      });
+    } catch (e) {
+      print("⚠️ Push notification initialization failed: $e");
+    }
   }
 
   @override
