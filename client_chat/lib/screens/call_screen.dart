@@ -232,6 +232,9 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _endCall() {
+    widget.socket.emit(
+      'cancel_call',
+    ); // Emits cancellation to recipient if ringing
     widget.socket.emit('end-call');
     _endCallLocally();
   }

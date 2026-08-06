@@ -4,7 +4,6 @@ const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
 
-// Automatically picks up the Secret File mounted by Render or local file
 const serviceAccount = require('./serviceAccountKey.json');
 
 admin.initializeApp({
@@ -66,12 +65,7 @@ io.on('connection', (socket) => {
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
       const targetRole = (data.sender === adminName) ? 'client' : 'admin';
-      sendPushNotification(
-        targetRole, 
-        `New Message from ${data.sender}`, 
-        data.message, 
-        { type: 'chat', sender: data.sender }
-      );
+      sendPushNotification(targetRole, `New Message from ${data.sender}`, data.message, { type: 'chat', sender: data.sender });
     } else {
       socket.broadcast.emit('receive_message', data);
     }
@@ -104,16 +98,11 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
 
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
-    sendPushNotification(
-      targetRole, 
-      "Incoming Call", 
-      `${data.callerName} is calling you...`, 
-      {
-        type: 'call',
-        callerName: data.callerName,
-        isVideoCall: data.isVideoCall ? 'true' : 'false'
-      }
-    );
+    sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`, {
+      type: 'call',
+      callerName: data.callerName,
+      isVideoCall: data.isVideoCall ? 'true' : 'false'
+    });
   });
 
   socket.on('call_accepted', (data) => {
@@ -127,6 +116,12 @@ io.on('connection', (socket) => {
       callLogs[0].status = 'Declined';
     }
     socket.broadcast.emit('call_rejected');
+    io.emit('call_logs_update', callLogs);
+  });
+
+  // Bug Fix: Handle call cancellation when caller cuts the call before pickup
+  socket.on('cancel_call', () => {
+    socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
   });
 
@@ -157,9 +152,8 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   if (!token) return;
 
   const message = {
+    notification: { title, body },
     data: {
-      title: title,
-      body: body,
       click_action: 'FLUTTER_NOTIFICATION_CLICK',
       ...additionalData
     },
@@ -167,7 +161,7 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   };
 
   admin.messaging().send(message)
-    .then((response) => console.log('📩 Successfully sent FCM data message:', response))
+    .then((response) => console.log('📩 Successfully sent FCM message:', response))
     .catch((error) => console.log('❌ Error sending FCM message:', error));
 }
 
