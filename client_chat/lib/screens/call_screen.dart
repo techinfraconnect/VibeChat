@@ -43,6 +43,7 @@ class _CallScreenState extends State<CallScreen> {
 
   bool _isRemoteDescriptionSet = false;
   final List<RTCIceCandidate> _remoteCandidatesQueue = [];
+  bool _isDisposed = false;
 
   @override
   void initState() {
@@ -87,7 +88,7 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     _peerConnection?.onTrack = (RTCTrackEvent event) {
-      if (event.streams.isNotEmpty && mounted) {
+      if (event.streams.isNotEmpty && mounted && !_isDisposed) {
         setState(() {
           _remoteRenderer.srcObject = event.streams[0];
           _isConnecting = false;
@@ -96,7 +97,7 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     _peerConnection?.onAddStream = (MediaStream stream) {
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         setState(() {
           _remoteRenderer.srcObject = stream;
           _isConnecting = false;
@@ -114,7 +115,7 @@ class _CallScreenState extends State<CallScreen> {
 
     _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
-        if (mounted) setState(() => _isConnecting = false);
+        if (mounted && !_isDisposed) setState(() => _isConnecting = false);
       }
     };
 
@@ -175,7 +176,7 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     widget.socket.on('update_settings', (data) {
-      if (!mounted) return;
+      if (!mounted || _isDisposed) return;
       setState(() {
         _canMute = data['clientCanMute'] ?? true;
         if (!widget.isAdmin && !_canMute && _isMuted) {
@@ -184,6 +185,7 @@ class _CallScreenState extends State<CallScreen> {
       });
     });
 
+    // Bulletproof listeners to immediately dismiss call screen on end/reject
     widget.socket.on('end-call', (_) => _endCallLocally());
     widget.socket.on('call_rejected', (_) => _endCallLocally());
   }
@@ -209,9 +211,11 @@ class _CallScreenState extends State<CallScreen> {
         }
       }
 
-      setState(() {
-        _isMuted = newState;
-      });
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _isMuted = newState;
+        });
+      }
     }
   }
 
@@ -219,9 +223,11 @@ class _CallScreenState extends State<CallScreen> {
     if (_localStream != null && _localStream!.getVideoTracks().isNotEmpty) {
       final videoTrack = _localStream!.getVideoTracks().first;
       await Helper.switchCamera(videoTrack);
-      setState(() {
-        _isFrontCamera = !_isFrontCamera;
-      });
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _isFrontCamera = !_isFrontCamera;
+        });
+      }
     }
   }
 
@@ -231,8 +237,13 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _endCallLocally() {
-    _localStream?.getTracks().forEach((track) => track.stop());
-    _peerConnection?.close();
+    if (_isDisposed) return;
+    _isDisposed = true;
+
+    try {
+      _localStream?.getTracks().forEach((track) => track.stop());
+      _peerConnection?.close();
+    } catch (_) {}
 
     widget.socket.off('call_ready_for_offer');
     widget.socket.off('offer');
@@ -243,12 +254,26 @@ class _CallScreenState extends State<CallScreen> {
     widget.socket.off('call_rejected');
 
     if (mounted) {
-      Navigator.pop(context);
+      Navigator.of(context).pop();
     }
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
+    try {
+      _localStream?.getTracks().forEach((track) => track.stop());
+      _peerConnection?.close();
+    } catch (_) {}
+
+    widget.socket.off('call_ready_for_offer');
+    widget.socket.off('offer');
+    widget.socket.off('answer');
+    widget.socket.off('ice-candidate');
+    widget.socket.off('update_settings');
+    widget.socket.off('end-call');
+    widget.socket.off('call_rejected');
+
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     super.dispose();

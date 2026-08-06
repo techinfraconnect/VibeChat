@@ -24,8 +24,8 @@ let clientCanMute = true;
 let showCallLogsToClient = true;
 let adminName = "Admin";
 let clientName = "Client";
-let chatHistory = [];       
-let callLogs = [];          
+let chatHistory = [];             
+let callLogs = [];                  
 let offlineMessages = [];   
 let registeredTokens = {}; 
 
@@ -66,7 +66,12 @@ io.on('connection', (socket) => {
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
       const targetRole = (data.sender === adminName) ? 'client' : 'admin';
-      sendPushNotification(targetRole, `New Message from ${data.sender}`, data.message);
+      sendPushNotification(
+        targetRole, 
+        `New Message from ${data.sender}`, 
+        data.message, 
+        { type: 'chat', sender: data.sender }
+      );
     } else {
       socket.broadcast.emit('receive_message', data);
     }
@@ -99,7 +104,16 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
 
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
-    sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`);
+    sendPushNotification(
+      targetRole, 
+      "Incoming Call", 
+      `${data.callerName} is calling you...`, 
+      {
+        type: 'call',
+        callerName: data.callerName,
+        isVideoCall: data.isVideoCall ? 'true' : 'false'
+      }
+    );
   });
 
   socket.on('call_accepted', (data) => {
@@ -109,7 +123,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('call_rejected', () => {
-    if (callLogs.length > 0) callLogs[0].status = 'Declined';
+    if (callLogs.length > 0) {
+      callLogs[0].status = 'Declined';
+    }
     socket.broadcast.emit('call_rejected');
     io.emit('call_logs_update', callLogs);
   });
@@ -122,24 +138,36 @@ io.on('connection', (socket) => {
   socket.on('offer', (data) => socket.broadcast.emit('offer', data));
   socket.on('answer', (data) => socket.broadcast.emit('answer', data));
   socket.on('ice-candidate', (data) => socket.broadcast.emit('ice-candidate', data));
-  socket.on('end-call', () => socket.broadcast.emit('end-call'));
+  
+  socket.on('end-call', () => {
+    if (callLogs.length > 0 && callLogs[0].status === 'Connected') {
+      callLogs[0].status = 'Completed';
+    }
+    socket.broadcast.emit('end-call');
+    io.emit('call_logs_update', callLogs);
+  });
 
   socket.on('disconnect', () => {
     console.log(`🟢 DEVICE DISCONNECTED: ${socket.id}`);
   });
 });
 
-function sendPushNotification(role, title, body) {
+function sendPushNotification(role, title, body, additionalData = {}) {
   const token = registeredTokens[role];
   if (!token) return;
 
   const message = {
-    notification: { title, body },
+    data: {
+      title: title,
+      body: body,
+      click_action: 'FLUTTER_NOTIFICATION_CLICK',
+      ...additionalData
+    },
     token: token
   };
 
   admin.messaging().send(message)
-    .then((response) => console.log('📩 Successfully sent FCM message:', response))
+    .then((response) => console.log('📩 Successfully sent FCM data message:', response))
     .catch((error) => console.log('❌ Error sending FCM message:', error));
 }
 
