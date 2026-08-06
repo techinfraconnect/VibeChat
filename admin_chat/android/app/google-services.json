@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "527201484260",
+    "firebase_url": "https://vibe-chat-3e6ff-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "vibe-chat-3e6ff",
+    "storage_bucket": "vibe-chat-3e6ff.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:527201484260:android:76e4e9821f39afbe319bf1",
+        "android_client_info": {
+          "package_name": "com.vibechat.admin_chat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBSYdNhLhy8RecDy7d0-Auspkb7bfirk9c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:527201484260:android:154682bfe4cc7a5c319bf1",
+        "android_client_info": {
+          "package_name": "com.vibechat.client_chat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBSYdNhLhy8RecDy7d0-Auspkb7bfirk9c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

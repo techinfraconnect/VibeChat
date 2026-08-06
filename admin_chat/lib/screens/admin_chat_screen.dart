@@ -150,11 +150,16 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      if (data['callerName'] == _adminName) return;
+      if (data['callerName'] == _adminName) {
+        return;
+      }
 
-      if (data['clientCanMute'] != null) _clientCanMute = data['clientCanMute'];
-      if (data['showCallLogsToClient'] != null)
+      if (data['clientCanMute'] != null) {
+        _clientCanMute = data['clientCanMute'];
+      }
+      if (data['showCallLogsToClient'] != null) {
         _showCallLogsToClient = data['showCallLogsToClient'];
+      }
 
       _showFaceTimeCallDialog(Map<String, dynamic>.from(data));
     });

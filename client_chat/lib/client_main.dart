@@ -29,10 +29,7 @@ class ClientChatApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue),
       // FIX 2: Pass the required 'senderName' and 'socket' parameters
-      home: ClientChatScreen(
-        senderName: 'Client',
-        socket: SocketService().socket,
-      ),
+      home: ClientChatScreen(socket: SocketService().socket),
     );
   }
 }

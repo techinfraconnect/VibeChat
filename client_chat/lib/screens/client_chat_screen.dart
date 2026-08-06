@@ -109,10 +109,12 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
     widget.socket.on('update_settings', (data) {
       if (!mounted) return;
       setState(() {
-        if (data['clientCanMute'] != null)
+        if (data['clientCanMute'] != null) {
           _clientCanMute = data['clientCanMute'];
-        if (data['showCallLogsToClient'] != null)
+        }
+        if (data['showCallLogsToClient'] != null) {
           _showCallLogsToClient = data['showCallLogsToClient'];
+        }
       });
     });
 
@@ -143,13 +145,17 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      if (data['callerName'] == _clientName) return;
+      if (data['callerName'] == _clientName) {
+        return;
+      }
 
       setState(() {
-        if (data['clientCanMute'] != null)
+        if (data['clientCanMute'] != null) {
           _clientCanMute = data['clientCanMute'];
-        if (data['showCallLogsToClient'] != null)
+        }
+        if (data['showCallLogsToClient'] != null) {
           _showCallLogsToClient = data['showCallLogsToClient'];
+        }
       });
 
       _showFaceTimeCallDialog(Map<String, dynamic>.from(data));

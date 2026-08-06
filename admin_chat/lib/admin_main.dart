@@ -33,10 +33,7 @@ class AdminApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.green),
       // FIX 2: Pass required named parameters 'senderName' and 'socket'
-      home: AdminChatScreen(
-        senderName: 'admin',
-        socket: SocketService().socket,
-      ),
+      home: AdminChatScreen(socket: SocketService().socket),
     );
   }
 }

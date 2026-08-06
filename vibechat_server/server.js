@@ -1,6 +1,19 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const admin = require('firebase-admin');
+
+// Initialize Firebase Admin securely via environment variables or local key file
+let serviceAccount;
+if (process.env.FIREBASE_CONFIG_JSON) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
+} else {
+  serviceAccount = require('./serviceAccountKey.json');
+}
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -16,6 +29,7 @@ let clientName = "Client";
 let chatHistory = [];       
 let callLogs = [];          
 let offlineMessages = [];   
+let registeredTokens = {}; // Stores FCM device tokens by role ('admin' or 'client')
 
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
@@ -29,6 +43,14 @@ io.on('connection', (socket) => {
     offlineMessages.forEach(msg => socket.emit('receive_message', msg));
     offlineMessages = [];
   }
+
+  // Register device FCM token for push notifications
+  socket.on('register_fcm_token', (data) => {
+    if (data.role && data.token) {
+      registeredTokens[data.role] = data.token;
+      console.log(`📱 FCM Token registered for role: ${data.role}`);
+    }
+  });
 
   socket.on('update_settings', (data) => {
     if (data.clientCanMute !== undefined) clientCanMute = data.clientCanMute;
@@ -46,6 +68,9 @@ io.on('connection', (socket) => {
     chatHistory.push(data);
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
+      // Send Push Notification if recipient is offline
+      const targetRole = (data.sender === adminName) ? 'client' : 'admin';
+      sendPushNotification(targetRole, `New Message from ${data.sender}`, data.message);
     } else {
       socket.broadcast.emit('receive_message', data);
     }
@@ -76,6 +101,10 @@ io.on('connection', (socket) => {
     
     socket.broadcast.emit('incoming_call', data);
     io.emit('call_logs_update', callLogs);
+
+    // Send Push Notification for incoming call
+    const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
+    sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`);
   });
 
   socket.on('call_accepted', (data) => {
@@ -104,6 +133,21 @@ io.on('connection', (socket) => {
     console.log(`🔴 DEVICE DISCONNECTED: ${socket.id}`);
   });
 });
+
+// Helper function to dispatch FCM push notifications
+function sendPushNotification(role, title, body) {
+  const token = registeredTokens[role];
+  if (!token) return;
+
+  const message = {
+    notification: { title, body },
+    token: token
+  };
+
+  admin.messaging().send(message)
+    .then((response) => console.log('📩 Successfully sent FCM message:', response))
+    .catch((error) => console.log('❌ Error sending FCM message:', error));
+}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {

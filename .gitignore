@@ -6,3 +6,10 @@
 /build/
 **/build/
 .dart_tool/
+vibechat_server/serviceAccountKey.json
+node_modules/
+**/node_modules/
+build/
+**/build/
+.dart_tool/
+**/.dart_tool/

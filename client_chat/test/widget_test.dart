@@ -5,6 +5,6 @@ void main() {
   testWidgets('ClientChatApp smoke test', (WidgetTester tester) async {
     // Build our app and trigger a frame.
     // FIX: Changed ClientApp() to ClientChatApp() to match main.dart
-    await tester.pumpWidget(const ClientChatApp());
+    await tester.pumpWidget(const ClientApp());
   });
 }
