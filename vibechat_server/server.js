@@ -4,16 +4,29 @@ const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
 
-// Professional initialization using direct cert import
+// Professional initialization with Base64 support for Render
 if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
+  let privateKey = process.env.FIREBASE_PRIVATE_KEY.trim();
+  
+  // If the key is provided in Base64 format, decode it safely
+  if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
+    try {
+      privateKey = Buffer.from(privateKey, 'base64').toString('utf8');
+    } catch (e) {
+      console.error("❌ Failed to decode Base64 private key.");
+    }
+  } else {
+    privateKey = privateKey.replace(/\\n/g, '\n');
+  }
+
   admin.initializeApp({
     credential: cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      privateKey: privateKey,
     })
   });
-  console.log("🔥 Firebase initialized using Individual Environment Variables.");
+  console.log("🔥 Firebase initialized using Individual Environment Variables (Base64 Safe).");
 } else {
   try {
     const serviceAccount = require('./serviceAccountKey.json');
