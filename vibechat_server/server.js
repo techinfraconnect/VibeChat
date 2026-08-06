@@ -2,14 +2,14 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
+const { cert } = require('firebase-admin/app');
 
-// Professional initialization: Check for Render/Production environment variables or local key file
+// Professional initialization using direct cert import
 if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
   admin.initializeApp({
-    credential: admin.credential.cert({
+    credential: cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      // Fixes private key newline formatting issues automatically in cloud environments
       privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
     })
   });
@@ -18,7 +18,7 @@ if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && pro
   try {
     const serviceAccount = require('./serviceAccountKey.json');
     admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
+      credential: cert(serviceAccount)
     });
     console.log("🔥 Firebase initialized using local serviceAccountKey.json.");
   } catch (error) {
