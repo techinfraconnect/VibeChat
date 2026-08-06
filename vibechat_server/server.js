@@ -4,41 +4,14 @@ const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
 
-// Professional initialization with Base64 support for Render
-if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
-  let privateKey = process.env.FIREBASE_PRIVATE_KEY.trim();
-  
-  // If the key is provided in Base64 format, decode it safely
-  if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
-    try {
-      privateKey = Buffer.from(privateKey, 'base64').toString('utf8');
-    } catch (e) {
-      console.error("❌ Failed to decode Base64 private key.");
-    }
-  } else {
-    privateKey = privateKey.replace(/\\n/g, '\n');
-  }
+// Automatically picks up the Secret File mounted by Render or local file
+const serviceAccount = require('./serviceAccountKey.json');
 
-  admin.initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: privateKey,
-    })
-  });
-  console.log("🔥 Firebase initialized using Individual Environment Variables (Base64 Safe).");
-} else {
-  try {
-    const serviceAccount = require('./serviceAccountKey.json');
-    admin.initializeApp({
-      credential: cert(serviceAccount)
-    });
-    console.log("🔥 Firebase initialized using local serviceAccountKey.json.");
-  } catch (error) {
-    console.error("❌ CRITICAL: Firebase credentials not found! Set environment variables or provide serviceAccountKey.json.");
-    process.exit(1);
-  }
-}
+admin.initializeApp({
+  credential: cert(serviceAccount)
+});
+
+console.log("🔥 Firebase initialized successfully via Secret File.");
 
 const app = express();
 const server = http.createServer(app);
