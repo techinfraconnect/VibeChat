@@ -2,24 +2,52 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'screens/admin_chat_screen.dart';
 
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
+@pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {}
-  print("Handling a background message: ${message.messageId}");
+  await Firebase.initializeApp();
+  print("Handling background message: ${message.messageId}");
+
+  if (message.notification != null) {
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          'vibechat_channel',
+          'VibeChat Notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+        );
+    const NotificationDetails details = NotificationDetails(
+      android: androidDetails,
+    );
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecond,
+      message.notification?.title ?? 'VibeChat Admin',
+      message.notification?.body ?? '',
+      details,
+    );
+  }
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp();
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  } catch (e) {
-    print("⚠️ Firebase initialization error: $e");
-  }
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+  );
+  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
   runApp(const AdminApp());
 }
 
@@ -30,6 +58,7 @@ class AdminApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'VibeChat Admin',
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue),
       home: const MainChatWrapper(),
@@ -69,32 +98,19 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
 
     socket.onConnect((_) {
       print('🟢 Admin Connected to server successfully!');
-      if (mounted) {
-        setState(() {
-          isConnected = true;
-        });
-      }
+      if (mounted) setState(() => isConnected = true);
       _initializePushNotifications();
     });
 
     socket.onConnectError((err) => print('❌ Connect Error: $err'));
     socket.onError((err) => print('❌ Error: $err'));
-
     socket.onDisconnect((_) {
-      if (mounted) {
-        setState(() {
-          isConnected = false;
-        });
-      }
+      if (mounted) setState(() => isConnected = false);
     });
 
-    // Fallback timer: forces entry to the admin screen after 4 seconds
     Future.delayed(const Duration(seconds: 4), () {
       if (!isConnected && mounted) {
-        print('⚠️ Connection timeout reached, forcing entry to admin screen.');
-        setState(() {
-          isConnected = true;
-        });
+        setState(() => isConnected = true);
       }
     });
   }
@@ -102,7 +118,6 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
   void _initializePushNotifications() async {
     try {
       FirebaseMessaging messaging = FirebaseMessaging.instance;
-
       NotificationSettings settings = await messaging.requestPermission(
         alert: true,
         badge: true,
@@ -111,9 +126,6 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
         print('Admin granted notification permissions.');
-      } else {
-        print('Admin declined or did not accept permission.');
-        return;
       }
 
       String? token = await messaging.getToken();
@@ -126,10 +138,37 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
         print(
           'Foreground notification received for Admin: ${message.notification?.title}',
         );
+        RemoteNotification? notification = message.notification;
+        if (notification != null) {
+          _showLocalNotification(
+            notification.title ?? 'New Message',
+            notification.body ?? '',
+          );
+        }
       });
     } catch (e) {
-      print("⚠️ Push notification initialization failed: $e");
+      print("⚠️ Notification initialization failed: $e");
     }
+  }
+
+  void _showLocalNotification(String title, String body) async {
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          'vibechat_channel',
+          'VibeChat Notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+        );
+    const NotificationDetails details = NotificationDetails(
+      android: androidDetails,
+    );
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecond,
+      title,
+      body,
+      details,
+    );
   }
 
   @override

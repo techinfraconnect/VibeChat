@@ -65,7 +65,12 @@ io.on('connection', (socket) => {
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
       const targetRole = (data.sender === adminName) ? 'client' : 'admin';
-      sendPushNotification(targetRole, `New Message from ${data.sender}`, data.message, { type: 'chat', sender: data.sender });
+      sendPushNotification(
+        targetRole, 
+        `New Message from ${data.sender}`, 
+        data.message, 
+        { type: 'chat', sender: data.sender }
+      );
     } else {
       socket.broadcast.emit('receive_message', data);
     }
@@ -98,11 +103,16 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
 
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
-    sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`, {
-      type: 'call',
-      callerName: data.callerName,
-      isVideoCall: data.isVideoCall ? 'true' : 'false'
-    });
+    sendPushNotification(
+      targetRole, 
+      "Incoming Call", 
+      `${data.callerName} is calling you...`, 
+      {
+        type: 'call',
+        callerName: data.callerName,
+        isVideoCall: data.isVideoCall ? 'true' : 'false'
+      }
+    );
   });
 
   socket.on('call_accepted', (data) => {
@@ -119,7 +129,6 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
   });
 
-  // Critical fix: Broadcast call cancellation when caller hangs up during ringing
   socket.on('cancel_call', () => {
     if (callLogs.length > 0 && callLogs[0].status === 'Missed') {
       callLogs[0].status = 'Cancelled';
@@ -156,6 +165,16 @@ function sendPushNotification(role, title, body, additionalData = {}) {
 
   const message = {
     notification: { title, body },
+    android: {
+      priority: 'high',
+      notification: {
+        sound: 'default',
+        channelId: 'vibechat_channel',
+        priority: 'high',
+        defaultSound: true,
+        defaultVibrateTimings: true
+      }
+    },
     data: {
       click_action: 'FLUTTER_NOTIFICATION_CLICK',
       ...additionalData
@@ -164,7 +183,7 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   };
 
   admin.messaging().send(message)
-    .then((response) => console.log('📩 Successfully sent FCM message:', response))
+    .then((response) => console.log('📩 Successfully sent High-Priority FCM message:', response))
     .catch((error) => console.log('❌ Error sending FCM message:', error));
 }
 

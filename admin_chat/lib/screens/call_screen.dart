@@ -35,6 +35,7 @@ class _CallScreenState extends State<CallScreen> {
 
   bool _isConnecting = true;
   bool _isMuted = false;
+  bool _isSpeakerOn = false; // Tracks speaker vs earpiece state
   bool _isFrontCamera = true;
   late bool _canMute;
 
@@ -59,7 +60,12 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _initWebRTC() async {
-    // Pro optimization: Fix video lag by constraining resolution and framerate
+    // 1. Audio routing configuration: 
+    // Audio calls default to earpiece (false), video calls default to speakerphone (true)
+    _isSpeakerOn = widget.isVideoCall;
+    await Helper.setSpeakerphoneOn(_isSpeakerOn);
+
+    // 2. Video constraints optimization to prevent video lagging
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': widget.isVideoCall
@@ -68,6 +74,9 @@ class _CallScreenState extends State<CallScreen> {
                 'minWidth': '640',
                 'minHeight': '480',
                 'minFrameRate': '30',
+                'maxWidth': '1280',
+                'maxHeight': '720',
+                'maxFrameRate': '30',
               },
               'facingMode': 'user',
             }
@@ -229,6 +238,17 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  // Toggle between Earpiece and Speakerphone
+  Future<void> _toggleSpeaker() async {
+    bool newSpeakerState = !_isSpeakerOn;
+    await Helper.setSpeakerphoneOn(newSpeakerState);
+    if (mounted && !_isDisposed) {
+      setState(() {
+        _isSpeakerOn = newSpeakerState;
+      });
+    }
+  }
+
   void _toggleCamera() async {
     if (_localStream != null && _localStream!.getVideoTracks().isNotEmpty) {
       final videoTrack = _localStream!.getVideoTracks().first;
@@ -242,7 +262,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _endCall() {
-    // Crucial: Send cancel_call so recipient popup ringing screen closes immediately
+    // Fixes ringing sync bug when caller hangs up before pickup
     widget.socket.emit('cancel_call');
     widget.socket.emit('end-call');
     _endCallLocally();
@@ -359,8 +379,8 @@ class _CallScreenState extends State<CallScreen> {
                     _isConnecting
                         ? "Connecting..."
                         : (widget.isVideoCall
-                              ? "Video Paused"
-                              : "Secure Audio Call"),
+                            ? "Video Paused"
+                            : "Secure Audio Call"),
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.5),
                       fontSize: 15,
@@ -449,6 +469,14 @@ class _CallScreenState extends State<CallScreen> {
                           const SizedBox(width: 16),
                         ],
 
+                        // Speaker / Earpiece Toggle Button
+                        _buildGlassButton(
+                          icon: _isSpeakerOn ? Icons.volume_up_rounded : Icons.hearing_rounded,
+                          onPressed: _toggleSpeaker,
+                          isActive: _isSpeakerOn,
+                        ),
+                        const SizedBox(width: 16),
+
                         if (showMuteButton) ...[
                           _buildGlassButton(
                             icon: _isMuted
@@ -494,8 +522,8 @@ class _CallScreenState extends State<CallScreen> {
           color: isDestructive
               ? const Color(0xFFFF3B30)
               : (isActive
-                    ? Colors.white
-                    : const Color(0xFF3A3A3C).withValues(alpha: 0.8)),
+                  ? Colors.white
+                  : const Color(0xFF3A3A3C).withValues(alpha: 0.8)),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.2),
