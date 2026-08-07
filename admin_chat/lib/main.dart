@@ -12,7 +12,9 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
   print("Handling background message: ${message.messageId}");
 
   if (message.notification != null) {
@@ -20,6 +22,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         AndroidNotificationDetails(
           'vibechat_channel',
           'VibeChat Notifications',
+          channelDescription: 'Notifications for incoming messages and calls',
           importance: Importance.max,
           priority: Priority.high,
           playSound: true,
@@ -38,15 +41,44 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
+  // Fail-safe timeout to prevent freezing on splash screen
+  try {
+    await Firebase.initializeApp().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () {
+        print("⚠️ Firebase init timed out. Continuing app startup...");
+        throw Exception("Firebase timeout");
+      },
+    );
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    print("⚠️ Firebase initialization error: $e");
+  }
+
+  // Initialize local notifications & explicitly create Android notification channel
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
   const InitializationSettings initializationSettings = InitializationSettings(
     android: initializationSettingsAndroid,
   );
+
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+  // CRITICAL FOR PHYSICAL ANDROID PHONES: Create the notification channel
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'vibechat_channel',
+    'VibeChat Notifications',
+    description: 'Notifications for incoming messages and calls',
+    importance: Importance.max,
+    playSound: true,
+  );
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
+      ?.createNotificationChannel(channel);
 
   runApp(const AdminApp());
 }
@@ -108,7 +140,8 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
       if (mounted) setState(() => isConnected = false);
     });
 
-    Future.delayed(const Duration(seconds: 4), () {
+    // Fallback timer: forces entry to admin screen after 3 seconds if render server wakes up slow
+    Future.delayed(const Duration(seconds: 3), () {
       if (!isConnected && mounted) {
         setState(() => isConnected = true);
       }
@@ -156,6 +189,7 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
         AndroidNotificationDetails(
           'vibechat_channel',
           'VibeChat Notifications',
+          channelDescription: 'Notifications for incoming messages and calls',
           importance: Importance.max,
           priority: Priority.high,
           playSound: true,

@@ -12,15 +12,17 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
   print("Handling background message: ${message.messageId}");
 
-  // Show local notification if background message arrives
   if (message.notification != null) {
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
           'vibechat_channel',
           'VibeChat Notifications',
+          channelDescription: 'Notifications for incoming messages and calls',
           importance: Importance.max,
           priority: Priority.high,
           playSound: true,
@@ -39,15 +41,43 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
+  // Fail-safe timeout to prevent splash screen freezes
+  try {
+    await Firebase.initializeApp().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () {
+        print("⚠️ Firebase init timed out. Continuing app startup...");
+        throw Exception("Firebase timeout");
+      },
+    );
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    print("⚠️ Firebase initialization error: $e");
+  }
+
+  // Initialize local notifications
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
   const InitializationSettings initializationSettings = InitializationSettings(
     android: initializationSettingsAndroid,
   );
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+  // CRITICAL FOR PHYSICAL ANDROID PHONES (Vivo/Honor): Create the high-importance channel
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'vibechat_channel',
+    'VibeChat Notifications',
+    description: 'Notifications for incoming messages and calls',
+    importance: Importance.max,
+    playSound: true,
+  );
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
+      ?.createNotificationChannel(channel);
 
   runApp(const ClientApp());
 }
@@ -157,6 +187,7 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
         AndroidNotificationDetails(
           'vibechat_channel',
           'VibeChat Notifications',
+          channelDescription: 'Notifications for incoming messages and calls',
           importance: Importance.max,
           priority: Priority.high,
           playSound: true,
