@@ -62,7 +62,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_message', (data) => {
-    // PRO FIX: Inject Unique IDs and Timestamps to prevent Flutter from overwriting/losing history
     data.id = data.id || Date.now().toString();
     data.timestamp = data.timestamp || Date.now();
 
@@ -97,7 +96,7 @@ io.on('connection', (socket) => {
     const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     const logEntry = {
-      id: Date.now().toString(), // PRO FIX: Unique ID for call logs
+      id: Date.now().toString(),
       caller: data.callerName,
       type: data.isVideoCall ? 'WhatsApp Video' : 'WhatsApp Audio',
       status: 'Missed',
@@ -141,6 +140,10 @@ io.on('connection', (socket) => {
     }
     socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
+
+    // PRO FIX: Fire Silent Push to instantly kill the ringing system notification on the target device
+    sendPushNotification('client', 'Call Cancelled', 'The call was cancelled', { type: 'cancel_call' });
+    sendPushNotification('admin', 'Call Cancelled', 'The call was cancelled', { type: 'cancel_call' });
   });
 
   socket.on('clear_call_logs', () => {
@@ -161,7 +164,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`🟢 DEVICE DISCONNECTED: ${socket.id}`);
+    console.log(`🔴 DEVICE DISCONNECTED: ${socket.id}`);
   });
 });
 
@@ -169,12 +172,10 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   const token = registeredTokens[role];
   if (!token) return;
 
-  // PRO FIX: "Data-Only Payload"
-  // Completely removed the UI `notification: {}` block.
-  // This forces Android devices to wake up the Flutter background handler natively.
   const message = {
     android: {
-      priority: 'high'
+      priority: 'high',
+      ttl: 0 // PRO FIX: Forces Android to deliver immediately or drop it, crucial for calls
     },
     apns: {
       headers: {
@@ -196,8 +197,8 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   };
 
   admin.messaging().send(message)
-    .then((response) => console.log('📩 Successfully sent High-Priority DATA payload:', response))
-    .catch((error) => console.log('❌ Error sending FCM message:', error));
+    .then((response) => console.log(`📩 FCM payload sent to ${role}:`, response))
+    .catch((error) => console.log('❌ FCM Error:', error));
 }
 
 const PORT = process.env.PORT || 3000;

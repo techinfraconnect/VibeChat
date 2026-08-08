@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // REQUIRED
 import 'call_screen.dart';
 import 'call_logs_screen.dart';
 
@@ -106,7 +107,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('chat_history', (data) {
       if (!mounted || data == null) return;
-
       List<dynamic> serverData = [];
       if (data is List) {
         serverData = (data.isNotEmpty && data.first is List)
@@ -147,7 +147,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('receive_message', (data) {
       if (!mounted || data == null) return;
-
       final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
       final Map<String, dynamic> newMsg = Map<String, dynamic>.from(
         rawData as Map,
@@ -167,7 +166,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('edit_message', (data) {
       if (!mounted || data == null) return;
-
       final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
       final Map<String, dynamic> mapData = Map<String, dynamic>.from(
         rawData as Map,
@@ -184,7 +182,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('call_logs', (data) {
       if (!mounted || data == null) return;
-
       List<dynamic> serverData = [];
       if (data is List) {
         serverData = (data.isNotEmpty && data.first is List)
@@ -217,7 +214,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('call_logs_update', (data) {
       if (!mounted || data == null) return;
-
       List<dynamic> serverData = [];
       if (data is List) {
         serverData = (data.isNotEmpty && data.first is List)
@@ -255,7 +251,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('update_names', (data) async {
       if (!mounted || data == null) return;
-
       final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
       final Map<String, dynamic> mapData = Map<String, dynamic>.from(
         rawData as Map,
@@ -276,7 +271,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('update_settings', (data) {
       if (!mounted || data == null) return;
-
       final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
       final Map<String, dynamic> mapData = Map<String, dynamic>.from(
         rawData as Map,
@@ -302,7 +296,11 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       );
     });
 
-    widget.socket.on('cancel_call', (_) {
+    widget.socket.on('cancel_call', (_) async {
+      if (!mounted) return;
+      // PRO FIX: Brutally kill the system tray notification if the app happens to be open
+      await FlutterLocalNotificationsPlugin().cancel(8888);
+
       if (_activeCallDialogContext != null) {
         Navigator.of(_activeCallDialogContext!).pop();
         _activeCallDialogContext = null;
@@ -311,7 +309,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted || data == null) return;
-
       final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
       final Map<String, dynamic> mapData = Map<String, dynamic>.from(
         rawData as Map,
@@ -404,8 +401,11 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                         FloatingActionButton(
                           heroTag: "decline_call_client",
                           backgroundColor: const Color(0xFFFF3B30),
-                          onPressed: () {
+                          onPressed: () async {
                             _activeCallDialogContext = null;
+                            await FlutterLocalNotificationsPlugin().cancel(
+                              8888,
+                            );
                             Navigator.pop(ctx);
                             widget.socket.emit('call_rejected');
                           },
@@ -418,8 +418,11 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                         FloatingActionButton(
                           heroTag: "accept_call_client",
                           backgroundColor: const Color(0xFF34C759),
-                          onPressed: () {
+                          onPressed: () async {
                             _activeCallDialogContext = null;
+                            await FlutterLocalNotificationsPlugin().cancel(
+                              8888,
+                            );
                             Navigator.pop(ctx);
                             Navigator.push(
                               context,

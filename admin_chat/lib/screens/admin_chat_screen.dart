@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // REQUIRED
 import 'call_screen.dart';
 import 'call_logs_screen.dart';
 
@@ -32,25 +33,6 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   String _clientName = "Client";
   BuildContext? _activeCallDialogContext;
 
-  // PRO FIX: Bulletproof extractors to prevent any type cast crashes
-  Map<String, dynamic> _safeGetMap(dynamic data) {
-    if (data == null) return <String, dynamic>{};
-    if (data is Map) return Map<String, dynamic>.from(data);
-    if (data is List && data.isNotEmpty && data.first is Map) {
-      return Map<String, dynamic>.from(data.first);
-    }
-    return <String, dynamic>{};
-  }
-
-  List<dynamic> _safeGetList(dynamic data) {
-    if (data == null) return [];
-    if (data is List) {
-      if (data.isNotEmpty && data.first is List) return data.first as List;
-      return data;
-    }
-    return [];
-  }
-
   @override
   void initState() {
     super.initState();
@@ -72,7 +54,9 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       try {
         List<dynamic> decoded = jsonDecode(cachedMessages);
         setState(() {
-          _messages = decoded.map((item) => _safeGetMap(item)).toList();
+          _messages = decoded
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
         });
         _scrollToBottom();
       } catch (_) {}
@@ -83,7 +67,9 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       try {
         List<dynamic> decodedLogs = jsonDecode(cachedLogs);
         setState(() {
-          _callLogs = decodedLogs.map((item) => _safeGetMap(item)).toList();
+          _callLogs = decodedLogs
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
         });
       } catch (_) {}
     }
@@ -137,20 +123,29 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     widget.socket.off('cancel_call');
 
     widget.socket.on('chat_history', (data) {
-      if (!mounted) return;
-      List<dynamic> serverData = _safeGetList(data);
+      if (!mounted || data == null) return;
+      List<dynamic> serverData = [];
+      if (data is List) {
+        serverData = (data.isNotEmpty && data.first is List)
+            ? data.first
+            : data;
+      }
       if (serverData.isEmpty) return;
 
       bool addedNew = false;
       setState(() {
         for (var item in serverData) {
-          final Map<String, dynamic> sm = _safeGetMap(item);
-          if (sm.isEmpty) continue;
+          if (item == null) continue;
+          final rawItem = item is List
+              ? (item.isNotEmpty ? item.first : {})
+              : item;
+          final Map<String, dynamic> sm = Map<String, dynamic>.from(
+            rawItem as Map,
+          );
 
           bool exists = _messages.any(
             (m) => m['id'] != null && m['id'] == sm['id'],
           );
-
           if (!exists) {
             _messages.add(sm);
             addedNew = true;
@@ -168,9 +163,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     });
 
     widget.socket.on('receive_message', (data) {
-      if (!mounted) return;
-      final Map<String, dynamic> newMsg = _safeGetMap(data);
-      if (newMsg.isEmpty) return;
+      if (!mounted || data == null) return;
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> newMsg = Map<String, dynamic>.from(
+        rawData as Map,
+      );
 
       setState(() {
         bool exists = _messages.any(
@@ -185,9 +182,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     });
 
     widget.socket.on('edit_message', (data) {
-      if (!mounted) return;
-      final Map<String, dynamic> mapData = _safeGetMap(data);
-      if (mapData.isEmpty) return;
+      if (!mounted || data == null) return;
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
 
       setState(() {
         int? index = mapData['index'] as int?;
@@ -199,14 +198,24 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     });
 
     widget.socket.on('call_logs', (data) {
-      if (!mounted) return;
-      List<dynamic> serverData = _safeGetList(data);
+      if (!mounted || data == null) return;
+      List<dynamic> serverData = [];
+      if (data is List) {
+        serverData = (data.isNotEmpty && data.first is List)
+            ? data.first
+            : data;
+      }
       if (serverData.isEmpty) return;
 
       setState(() {
         for (var item in serverData) {
-          final Map<String, dynamic> log = _safeGetMap(item);
-          if (log.isEmpty) continue;
+          if (item == null) continue;
+          final rawItem = item is List
+              ? (item.isNotEmpty ? item.first : {})
+              : item;
+          final Map<String, dynamic> log = Map<String, dynamic>.from(
+            rawItem as Map,
+          );
 
           int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
           if (index != -1) {
@@ -221,8 +230,13 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     });
 
     widget.socket.on('call_logs_update', (data) {
-      if (!mounted) return;
-      List<dynamic> serverData = _safeGetList(data);
+      if (!mounted || data == null) return;
+      List<dynamic> serverData = [];
+      if (data is List) {
+        serverData = (data.isNotEmpty && data.first is List)
+            ? data.first
+            : data;
+      }
 
       if (serverData.isEmpty) {
         setState(() => _callLogs.clear());
@@ -232,8 +246,13 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
       setState(() {
         for (var item in serverData) {
-          final Map<String, dynamic> log = _safeGetMap(item);
-          if (log.isEmpty) continue;
+          if (item == null) continue;
+          final rawItem = item is List
+              ? (item.isNotEmpty ? item.first : {})
+              : item;
+          final Map<String, dynamic> log = Map<String, dynamic>.from(
+            rawItem as Map,
+          );
 
           int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
           if (index != -1) {
@@ -247,25 +266,12 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       _saveLocalCallLogs();
     });
 
-    widget.socket.on('update_settings', (data) {
-      if (!mounted) return;
-      final Map<String, dynamic> mapData = _safeGetMap(data);
-      if (mapData.isEmpty) return;
-
-      setState(() {
-        if (mapData['clientCanMute'] != null) {
-          _clientCanMute = mapData['clientCanMute'] as bool;
-        }
-        if (mapData['showCallLogsToClient'] != null) {
-          _showCallLogsToClient = mapData['showCallLogsToClient'] as bool;
-        }
-      });
-    });
-
     widget.socket.on('update_names', (data) async {
-      if (!mounted) return;
-      final Map<String, dynamic> mapData = _safeGetMap(data);
-      if (mapData.isEmpty) return;
+      if (!mounted || data == null) return;
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
 
       final prefs = await SharedPreferences.getInstance();
       setState(() {
@@ -280,6 +286,23 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       });
     });
 
+    widget.socket.on('update_settings', (data) {
+      if (!mounted || data == null) return;
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
+
+      setState(() {
+        if (mapData['clientCanMute'] != null) {
+          _clientCanMute = mapData['clientCanMute'] as bool;
+        }
+        if (mapData['showCallLogsToClient'] != null) {
+          _showCallLogsToClient = mapData['showCallLogsToClient'] as bool;
+        }
+      });
+    });
+
     widget.socket.on('call_rejected', (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -290,7 +313,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       );
     });
 
-    widget.socket.on('cancel_call', (_) {
+    widget.socket.on('cancel_call', (_) async {
+      if (!mounted) return;
+      // PRO FIX: Brutally kill the system tray notification if the app happens to be open
+      await FlutterLocalNotificationsPlugin().cancel(8888);
+
       if (_activeCallDialogContext != null) {
         Navigator.of(_activeCallDialogContext!).pop();
         _activeCallDialogContext = null;
@@ -298,9 +325,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     });
 
     widget.socket.on('incoming_call', (data) {
-      if (!mounted) return;
-      final Map<String, dynamic> mapData = _safeGetMap(data);
-      if (mapData.isEmpty) return;
+      if (!mounted || data == null) return;
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
 
       if (mapData['callerName'] == _adminName) return;
 
@@ -318,9 +347,6 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   }
 
   void _showFaceTimeCallDialog(Map<String, dynamic> data) {
-    String callerName = data['callerName']?.toString() ?? 'Unknown';
-    String initial = callerName.isNotEmpty ? callerName[0].toUpperCase() : 'U';
-
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -353,7 +379,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                     radius: 55,
                     backgroundColor: Colors.grey[800],
                     child: Text(
-                      initial,
+                      (data['callerName'] as String)[0].toUpperCase(),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 40,
@@ -363,7 +389,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    callerName,
+                    data['callerName'] as String,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 32,
@@ -392,8 +418,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                         FloatingActionButton(
                           heroTag: "decline_call_admin",
                           backgroundColor: const Color(0xFFFF3B30),
-                          onPressed: () {
+                          onPressed: () async {
                             _activeCallDialogContext = null;
+                            await FlutterLocalNotificationsPlugin().cancel(
+                              8888,
+                            );
                             Navigator.pop(ctx);
                             widget.socket.emit('call_rejected');
                           },
@@ -406,8 +435,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                         FloatingActionButton(
                           heroTag: "accept_call_admin",
                           backgroundColor: const Color(0xFF34C759),
-                          onPressed: () {
+                          onPressed: () async {
                             _activeCallDialogContext = null;
+                            await FlutterLocalNotificationsPlugin().cancel(
+                              8888,
+                            );
                             Navigator.pop(ctx);
                             Navigator.push(
                               context,

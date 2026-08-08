@@ -17,60 +17,73 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   } catch (_) {}
   print("Handling background message: ${message.messageId}");
 
-  // PRO FIX: Extract from message.data for background Data-Only payloads
+  // PRO FIX 1: Re-initialize plugin inside the background isolate memory space!
+  final isolateFlnp = FlutterLocalNotificationsPlugin();
+  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+  await isolateFlnp.initialize(
+    const InitializationSettings(android: androidInit),
+  );
+
+  const channel = AndroidNotificationChannel(
+    'vibechat_channel',
+    'VibeChat Notifications',
+    importance: Importance.max,
+    playSound: true,
+  );
+  await isolateFlnp
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
+      ?.createNotificationChannel(channel);
+
+  // PRO FIX 2: Silent Push interceptor to kill ringing notification
+  if (message.data['type'] == 'cancel_call') {
+    await isolateFlnp.cancel(8888); // Instantly removes missed call ring
+    return;
+  }
+
   final title =
       message.notification?.title ?? message.data['title'] ?? 'VibeChat';
   final body =
       message.notification?.body ?? message.data['body'] ?? 'New Notification';
+  final isCall = message.data['type'] == 'call';
 
-  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+  const androidDetails = AndroidNotificationDetails(
     'vibechat_channel',
     'VibeChat Notifications',
     channelDescription: 'Notifications for incoming messages and calls',
     importance: Importance.max,
     priority: Priority.high,
     playSound: true,
-    fullScreenIntent: true, // Wakes the device screen when locked!
+    fullScreenIntent: true,
   );
 
-  const NotificationDetails details = NotificationDetails(
-    android: androidDetails,
-  );
+  int notifId = isCall ? 8888 : DateTime.now().millisecond;
 
-  await flutterLocalNotificationsPlugin.show(
-    DateTime.now().millisecond,
+  await isolateFlnp.show(
+    notifId,
     title,
     body,
-    details,
+    const NotificationDetails(android: androidDetails),
   );
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Fail-safe timeout to prevent splash screen freezes
   try {
-    await Firebase.initializeApp().timeout(
-      const Duration(seconds: 3),
-      onTimeout: () {
-        print("⚠️ Firebase init timed out. Continuing app startup...");
-        throw Exception("Firebase timeout");
-      },
-    );
+    await Firebase.initializeApp().timeout(const Duration(seconds: 3));
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   } catch (e) {
     print("⚠️ Firebase initialization error: $e");
   }
 
-  // Initialize local notifications
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
-  const InitializationSettings initializationSettings = InitializationSettings(
-    android: initializationSettingsAndroid,
+  await flutterLocalNotificationsPlugin.initialize(
+    const InitializationSettings(android: initializationSettingsAndroid),
   );
-  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
-  // CRITICAL FOR PHYSICAL ANDROID PHONES (Vivo/Honor): Create the high-importance channel
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'vibechat_channel',
     'VibeChat Notifications',
@@ -132,81 +145,62 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
     );
 
     socket.connect();
-
     socket.onConnect((_) {
-      print('🟢 Connected to server successfully!');
       if (mounted) setState(() => isConnected = true);
       _initializePushNotifications();
     });
-
-    socket.onConnectError((err) => print('❌ Connect Error: $err'));
-    socket.onError((err) => print('❌ Error: $err'));
     socket.onDisconnect((_) {
       if (mounted) setState(() => isConnected = false);
     });
 
     Future.delayed(const Duration(seconds: 4), () {
-      if (!isConnected && mounted) {
-        setState(() => isConnected = true);
-      }
+      if (!isConnected && mounted) setState(() => isConnected = true);
     });
   }
 
   void _initializePushNotifications() async {
     try {
       FirebaseMessaging messaging = FirebaseMessaging.instance;
-      NotificationSettings settings = await messaging.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-
-      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-        print('User granted notification permissions.');
-      }
+      await messaging.requestPermission(alert: true, badge: true, sound: true);
 
       String? token = await messaging.getToken();
-      if (token != null) {
-        print('📱 FCM Token retrieved: $token');
+      if (token != null)
         socket.emit('register_fcm_token', {'role': userRole, 'token': token});
-      }
 
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        print('Foreground notification received.');
-        // PRO FIX: Check message.data payload when app is open
+        if (message.data['type'] == 'cancel_call') {
+          flutterLocalNotificationsPlugin.cancel(8888);
+          return;
+        }
+
         final title =
             message.notification?.title ??
             message.data['title'] ??
             'New Message';
         final body = message.notification?.body ?? message.data['body'] ?? '';
+        final isCall = message.data['type'] == 'call';
+        int notifId = isCall ? 8888 : DateTime.now().millisecond;
 
-        _showLocalNotification(title, body);
-      });
-    } catch (e) {
-      print("⚠️ Notification initialization failed: $e");
-    }
-  }
+        const AndroidNotificationDetails androidDetails =
+            AndroidNotificationDetails(
+              'vibechat_channel',
+              'VibeChat Notifications',
+              channelDescription:
+                  'Notifications for incoming messages and calls',
+              importance: Importance.max,
+              priority: Priority.high,
+              playSound: true,
+              fullScreenIntent: true,
+            );
 
-  void _showLocalNotification(String title, String body) async {
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails(
-          'vibechat_channel',
-          'VibeChat Notifications',
-          channelDescription: 'Notifications for incoming messages and calls',
-          importance: Importance.max,
-          priority: Priority.high,
-          playSound: true,
-          fullScreenIntent: true,
+        flutterLocalNotificationsPlugin.show(
+          notifId,
+          title,
+          body,
+          const NotificationDetails(android: androidDetails),
         );
-    const NotificationDetails details = NotificationDetails(
-      android: androidDetails,
-    );
-    await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecond,
-      title,
-      body,
-      details,
-    );
+      });
+    } catch (e) {}
   }
 
   @override
