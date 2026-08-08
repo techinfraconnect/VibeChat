@@ -17,26 +17,32 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   } catch (_) {}
   print("Handling background message: ${message.messageId}");
 
-  if (message.notification != null) {
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails(
-          'vibechat_channel',
-          'VibeChat Notifications',
-          channelDescription: 'Notifications for incoming messages and calls',
-          importance: Importance.max,
-          priority: Priority.high,
-          playSound: true,
-        );
-    const NotificationDetails details = NotificationDetails(
-      android: androidDetails,
-    );
-    await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecond,
-      message.notification?.title ?? 'VibeChat',
-      message.notification?.body ?? '',
-      details,
-    );
-  }
+  // PRO FIX: Extract from message.data for background Data-Only payloads
+  final title =
+      message.notification?.title ?? message.data['title'] ?? 'VibeChat';
+  final body =
+      message.notification?.body ?? message.data['body'] ?? 'New Notification';
+
+  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    'vibechat_channel',
+    'VibeChat Notifications',
+    channelDescription: 'Notifications for incoming messages and calls',
+    importance: Importance.max,
+    priority: Priority.high,
+    playSound: true,
+    fullScreenIntent: true, // Wakes the device screen when locked!
+  );
+
+  const NotificationDetails details = NotificationDetails(
+    android: androidDetails,
+  );
+
+  await flutterLocalNotificationsPlugin.show(
+    DateTime.now().millisecond,
+    title,
+    body,
+    details,
+  );
 }
 
 void main() async {
@@ -166,16 +172,15 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
       }
 
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        print(
-          'Foreground notification received: ${message.notification?.title}',
-        );
-        RemoteNotification? notification = message.notification;
-        if (notification != null) {
-          _showLocalNotification(
-            notification.title ?? 'New Message',
-            notification.body ?? '',
-          );
-        }
+        print('Foreground notification received.');
+        // PRO FIX: Check message.data payload when app is open
+        final title =
+            message.notification?.title ??
+            message.data['title'] ??
+            'New Message';
+        final body = message.notification?.body ?? message.data['body'] ?? '';
+
+        _showLocalNotification(title, body);
       });
     } catch (e) {
       print("⚠️ Notification initialization failed: $e");
@@ -191,6 +196,7 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
           importance: Importance.max,
           priority: Priority.high,
           playSound: true,
+          fullScreenIntent: true,
         );
     const NotificationDetails details = NotificationDetails(
       android: androidDetails,

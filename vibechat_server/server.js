@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
 
+// Automatically picks up the Secret File mounted by Render or local file
 const serviceAccount = require('./serviceAccountKey.json');
 
 admin.initializeApp({
@@ -61,6 +62,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_message', (data) => {
+    // PRO FIX: Inject Unique IDs and Timestamps to prevent Flutter from overwriting/losing history
+    data.id = data.id || Date.now().toString();
+    data.timestamp = data.timestamp || Date.now();
+
     chatHistory.push(data);
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
@@ -92,6 +97,7 @@ io.on('connection', (socket) => {
     const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     const logEntry = {
+      id: Date.now().toString(), // PRO FIX: Unique ID for call logs
       caller: data.callerName,
       type: data.isVideoCall ? 'WhatsApp Video' : 'WhatsApp Audio',
       status: 'Missed',
@@ -163,19 +169,26 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   const token = registeredTokens[role];
   if (!token) return;
 
+  // PRO FIX: "Data-Only Payload"
+  // Completely removed the UI `notification: {}` block.
+  // This forces Android devices to wake up the Flutter background handler natively.
   const message = {
-    notification: { title, body },
     android: {
-      priority: 'high',
-      notification: {
-        sound: 'default',
-        channelId: 'vibechat_channel',
-        priority: 'high',
-        defaultSound: true,
-        defaultVibrateTimings: true
+      priority: 'high'
+    },
+    apns: {
+      headers: {
+        'apns-priority': '10'
+      },
+      payload: {
+        aps: {
+          contentAvailable: true
+        }
       }
     },
     data: {
+      title: String(title || 'VibeChat'),
+      body: String(body || 'New Notification'),
       click_action: 'FLUTTER_NOTIFICATION_CLICK',
       ...additionalData
     },
@@ -183,7 +196,7 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   };
 
   admin.messaging().send(message)
-    .then((response) => console.log('📩 Successfully sent High-Priority FCM message:', response))
+    .then((response) => console.log('📩 Successfully sent High-Priority DATA payload:', response))
     .catch((error) => console.log('❌ Error sending FCM message:', error));
 }
 

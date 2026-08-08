@@ -32,6 +32,25 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   String _clientName = "Client";
   BuildContext? _activeCallDialogContext;
 
+  // PRO FIX: Bulletproof extractors to prevent any type cast crashes
+  Map<String, dynamic> _safeGetMap(dynamic data) {
+    if (data == null) return <String, dynamic>{};
+    if (data is Map) return Map<String, dynamic>.from(data);
+    if (data is List && data.isNotEmpty && data.first is Map) {
+      return Map<String, dynamic>.from(data.first);
+    }
+    return <String, dynamic>{};
+  }
+
+  List<dynamic> _safeGetList(dynamic data) {
+    if (data == null) return [];
+    if (data is List) {
+      if (data.isNotEmpty && data.first is List) return data.first as List;
+      return data;
+    }
+    return [];
+  }
+
   @override
   void initState() {
     super.initState();
@@ -53,11 +72,19 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       try {
         List<dynamic> decoded = jsonDecode(cachedMessages);
         setState(() {
-          _messages = decoded
-              .map((item) => Map<String, dynamic>.from(item))
-              .toList();
+          _messages = decoded.map((item) => _safeGetMap(item)).toList();
         });
         _scrollToBottom();
+      } catch (_) {}
+    }
+
+    final String? cachedLogs = prefs.getString('admin_call_logs');
+    if (cachedLogs != null) {
+      try {
+        List<dynamic> decodedLogs = jsonDecode(cachedLogs);
+        setState(() {
+          _callLogs = decodedLogs.map((item) => _safeGetMap(item)).toList();
+        });
       } catch (_) {}
     }
   }
@@ -65,6 +92,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   Future<void> _saveLocalMessages() async {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('admin_chat_history', jsonEncode(_messages));
+  }
+
+  Future<void> _saveLocalCallLogs() async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('admin_call_logs', jsonEncode(_callLogs));
   }
 
   Future<void> _saveNames(String admin, String client) async {
@@ -106,17 +138,47 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('chat_history', (data) {
       if (!mounted) return;
+      List<dynamic> serverData = _safeGetList(data);
+      if (serverData.isEmpty) return;
+
+      bool addedNew = false;
       setState(() {
-        _messages = List<Map<String, dynamic>>.from(data);
+        for (var item in serverData) {
+          final Map<String, dynamic> sm = _safeGetMap(item);
+          if (sm.isEmpty) continue;
+
+          bool exists = _messages.any(
+            (m) => m['id'] != null && m['id'] == sm['id'],
+          );
+
+          if (!exists) {
+            _messages.add(sm);
+            addedNew = true;
+          }
+        }
+        _messages.sort(
+          (a, b) => (a['timestamp'] ?? 0).compareTo(b['timestamp'] ?? 0),
+        );
       });
-      _saveLocalMessages();
-      _scrollToBottom();
+
+      if (addedNew) {
+        _saveLocalMessages();
+        _scrollToBottom();
+      }
     });
 
     widget.socket.on('receive_message', (data) {
       if (!mounted) return;
+      final Map<String, dynamic> newMsg = _safeGetMap(data);
+      if (newMsg.isEmpty) return;
+
       setState(() {
-        _messages.add(Map<String, dynamic>.from(data));
+        bool exists = _messages.any(
+          (m) => m['id'] != null && m['id'] == newMsg['id'],
+        );
+        if (!exists) {
+          _messages.add(newMsg);
+        }
       });
       _saveLocalMessages();
       _scrollToBottom();
@@ -124,10 +186,13 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('edit_message', (data) {
       if (!mounted) return;
+      final Map<String, dynamic> mapData = _safeGetMap(data);
+      if (mapData.isEmpty) return;
+
       setState(() {
-        int index = data['index'];
-        if (index < _messages.length) {
-          _messages[index]['message'] = data['message'];
+        int? index = mapData['index'] as int?;
+        if (index != null && index < _messages.length) {
+          _messages[index]['message'] = mapData['message'];
         }
       });
       _saveLocalMessages();
@@ -135,28 +200,81 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('call_logs', (data) {
       if (!mounted) return;
+      List<dynamic> serverData = _safeGetList(data);
+      if (serverData.isEmpty) return;
+
       setState(() {
-        _callLogs = List<Map<String, dynamic>>.from(data);
+        for (var item in serverData) {
+          final Map<String, dynamic> log = _safeGetMap(item);
+          if (log.isEmpty) continue;
+
+          int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
+          if (index != -1) {
+            _callLogs[index] = log;
+          } else {
+            _callLogs.add(log);
+          }
+        }
+        _callLogs.sort((a, b) => (b['id'] ?? "").compareTo(a['id'] ?? ""));
       });
+      _saveLocalCallLogs();
     });
 
     widget.socket.on('call_logs_update', (data) {
       if (!mounted) return;
+      List<dynamic> serverData = _safeGetList(data);
+
+      if (serverData.isEmpty) {
+        setState(() => _callLogs.clear());
+        _saveLocalCallLogs();
+        return;
+      }
+
       setState(() {
-        _callLogs = List<Map<String, dynamic>>.from(data);
+        for (var item in serverData) {
+          final Map<String, dynamic> log = _safeGetMap(item);
+          if (log.isEmpty) continue;
+
+          int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
+          if (index != -1) {
+            _callLogs[index] = log;
+          } else {
+            _callLogs.add(log);
+          }
+        }
+        _callLogs.sort((a, b) => (b['id'] ?? "").compareTo(a['id'] ?? ""));
+      });
+      _saveLocalCallLogs();
+    });
+
+    widget.socket.on('update_settings', (data) {
+      if (!mounted) return;
+      final Map<String, dynamic> mapData = _safeGetMap(data);
+      if (mapData.isEmpty) return;
+
+      setState(() {
+        if (mapData['clientCanMute'] != null) {
+          _clientCanMute = mapData['clientCanMute'] as bool;
+        }
+        if (mapData['showCallLogsToClient'] != null) {
+          _showCallLogsToClient = mapData['showCallLogsToClient'] as bool;
+        }
       });
     });
 
     widget.socket.on('update_names', (data) async {
       if (!mounted) return;
+      final Map<String, dynamic> mapData = _safeGetMap(data);
+      if (mapData.isEmpty) return;
+
       final prefs = await SharedPreferences.getInstance();
       setState(() {
-        if (data['adminName'] != null) {
-          _adminName = data['adminName'];
+        if (mapData['adminName'] != null) {
+          _adminName = mapData['adminName'].toString();
           prefs.setString('admin_name', _adminName);
         }
-        if (data['clientName'] != null) {
-          _clientName = data['clientName'];
+        if (mapData['clientName'] != null) {
+          _clientName = mapData['clientName'].toString();
           prefs.setString('client_name', _clientName);
         }
       });
@@ -181,17 +299,28 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
 
     widget.socket.on('incoming_call', (data) {
       if (!mounted) return;
-      if (data['callerName'] == _adminName) return;
+      final Map<String, dynamic> mapData = _safeGetMap(data);
+      if (mapData.isEmpty) return;
 
-      if (data['clientCanMute'] != null) _clientCanMute = data['clientCanMute'];
-      if (data['showCallLogsToClient'] != null)
-        _showCallLogsToClient = data['showCallLogsToClient'];
+      if (mapData['callerName'] == _adminName) return;
 
-      _showFaceTimeCallDialog(Map<String, dynamic>.from(data));
+      setState(() {
+        if (mapData['clientCanMute'] != null) {
+          _clientCanMute = mapData['clientCanMute'] as bool;
+        }
+        if (mapData['showCallLogsToClient'] != null) {
+          _showCallLogsToClient = mapData['showCallLogsToClient'] as bool;
+        }
+      });
+
+      _showFaceTimeCallDialog(mapData);
     });
   }
 
   void _showFaceTimeCallDialog(Map<String, dynamic> data) {
+    String callerName = data['callerName']?.toString() ?? 'Unknown';
+    String initial = callerName.isNotEmpty ? callerName[0].toUpperCase() : 'U';
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -224,7 +353,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                     radius: 55,
                     backgroundColor: Colors.grey[800],
                     child: Text(
-                      data['callerName'][0].toUpperCase(),
+                      initial,
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 40,
@@ -234,7 +363,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    data['callerName'],
+                    callerName,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 32,
@@ -329,6 +458,8 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       _editingIndex = null;
     } else {
       final messageData = {
+        'id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
         'sender': _adminName,
         'message': _messageController.text.trim(),
       };
@@ -581,7 +712,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Text(
-                        msg['message'] ?? '',
+                        msg['message']?.toString() ?? '',
                         style: const TextStyle(
                           fontSize: 16,
                           color: Colors.white,

@@ -50,10 +50,22 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         List<dynamic> decoded = jsonDecode(cachedMessages);
         setState(() {
           _messages = decoded
-              .map((item) => Map<String, dynamic>.from(item))
+              .map((item) => Map<String, dynamic>.from(item as Map))
               .toList();
         });
         _scrollToBottom();
+      } catch (_) {}
+    }
+
+    final String? cachedLogs = prefs.getString('client_call_logs');
+    if (cachedLogs != null) {
+      try {
+        List<dynamic> decodedLogs = jsonDecode(cachedLogs);
+        setState(() {
+          _callLogs = decodedLogs
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+        });
       } catch (_) {}
     }
   }
@@ -61,6 +73,11 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   Future<void> _saveLocalMessages() async {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('client_chat_history', jsonEncode(_messages));
+  }
+
+  Future<void> _saveLocalCallLogs() async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('client_call_logs', jsonEncode(_callLogs));
   }
 
   void _scrollToBottom() {
@@ -88,71 +105,189 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
     widget.socket.off('cancel_call');
 
     widget.socket.on('chat_history', (data) {
-      if (!mounted) return;
+      if (!mounted || data == null) return;
+
+      List<dynamic> serverData = [];
+      if (data is List) {
+        serverData = (data.isNotEmpty && data.first is List)
+            ? data.first
+            : data;
+      }
+      if (serverData.isEmpty) return;
+
+      bool addedNew = false;
       setState(() {
-        _messages = List<Map<String, dynamic>>.from(data);
+        for (var item in serverData) {
+          if (item == null) continue;
+          final rawItem = item is List
+              ? (item.isNotEmpty ? item.first : {})
+              : item;
+          final Map<String, dynamic> sm = Map<String, dynamic>.from(
+            rawItem as Map,
+          );
+
+          bool exists = _messages.any(
+            (m) => m['id'] != null && m['id'] == sm['id'],
+          );
+          if (!exists) {
+            _messages.add(sm);
+            addedNew = true;
+          }
+        }
+        _messages.sort(
+          (a, b) => (a['timestamp'] ?? 0).compareTo(b['timestamp'] ?? 0),
+        );
       });
-      _saveLocalMessages();
-      _scrollToBottom();
+
+      if (addedNew) {
+        _saveLocalMessages();
+        _scrollToBottom();
+      }
     });
 
     widget.socket.on('receive_message', (data) {
-      if (!mounted) return;
+      if (!mounted || data == null) return;
+
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> newMsg = Map<String, dynamic>.from(
+        rawData as Map,
+      );
+
       setState(() {
-        _messages.add(Map<String, dynamic>.from(data));
+        bool exists = _messages.any(
+          (m) => m['id'] != null && m['id'] == newMsg['id'],
+        );
+        if (!exists) {
+          _messages.add(newMsg);
+        }
       });
       _saveLocalMessages();
       _scrollToBottom();
     });
 
     widget.socket.on('edit_message', (data) {
-      if (!mounted) return;
+      if (!mounted || data == null) return;
+
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
+
       setState(() {
-        int index = data['index'];
-        if (index < _messages.length) {
-          _messages[index]['message'] = data['message'];
+        int? index = mapData['index'] as int?;
+        if (index != null && index < _messages.length) {
+          _messages[index]['message'] = mapData['message'];
         }
       });
       _saveLocalMessages();
     });
 
     widget.socket.on('call_logs', (data) {
-      if (!mounted) return;
+      if (!mounted || data == null) return;
+
+      List<dynamic> serverData = [];
+      if (data is List) {
+        serverData = (data.isNotEmpty && data.first is List)
+            ? data.first
+            : data;
+      }
+      if (serverData.isEmpty) return;
+
       setState(() {
-        _callLogs = List<Map<String, dynamic>>.from(data);
+        for (var item in serverData) {
+          if (item == null) continue;
+          final rawItem = item is List
+              ? (item.isNotEmpty ? item.first : {})
+              : item;
+          final Map<String, dynamic> log = Map<String, dynamic>.from(
+            rawItem as Map,
+          );
+
+          int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
+          if (index != -1) {
+            _callLogs[index] = log;
+          } else {
+            _callLogs.add(log);
+          }
+        }
+        _callLogs.sort((a, b) => (b['id'] ?? "").compareTo(a['id'] ?? ""));
       });
+      _saveLocalCallLogs();
     });
 
     widget.socket.on('call_logs_update', (data) {
-      if (!mounted) return;
+      if (!mounted || data == null) return;
+
+      List<dynamic> serverData = [];
+      if (data is List) {
+        serverData = (data.isNotEmpty && data.first is List)
+            ? data.first
+            : data;
+      }
+
+      if (serverData.isEmpty) {
+        setState(() => _callLogs.clear());
+        _saveLocalCallLogs();
+        return;
+      }
+
       setState(() {
-        _callLogs = List<Map<String, dynamic>>.from(data);
+        for (var item in serverData) {
+          if (item == null) continue;
+          final rawItem = item is List
+              ? (item.isNotEmpty ? item.first : {})
+              : item;
+          final Map<String, dynamic> log = Map<String, dynamic>.from(
+            rawItem as Map,
+          );
+
+          int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
+          if (index != -1) {
+            _callLogs[index] = log;
+          } else {
+            _callLogs.add(log);
+          }
+        }
+        _callLogs.sort((a, b) => (b['id'] ?? "").compareTo(a['id'] ?? ""));
+      });
+      _saveLocalCallLogs();
+    });
+
+    widget.socket.on('update_names', (data) async {
+      if (!mounted || data == null) return;
+
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        if (mapData['clientName'] != null) {
+          _clientName = mapData['clientName'].toString();
+          prefs.setString('client_name', _clientName);
+        }
+        if (mapData['adminName'] != null) {
+          _adminName = mapData['adminName'].toString();
+          prefs.setString('admin_name', _adminName);
+        }
       });
     });
 
     widget.socket.on('update_settings', (data) {
-      if (!mounted) return;
-      setState(() {
-        if (data['clientCanMute'] != null) {
-          _clientCanMute = data['clientCanMute'];
-        }
-        if (data['showCallLogsToClient'] != null) {
-          _showCallLogsToClient = data['showCallLogsToClient'];
-        }
-      });
-    });
+      if (!mounted || data == null) return;
 
-    widget.socket.on('update_names', (data) async {
-      if (!mounted) return;
-      final prefs = await SharedPreferences.getInstance();
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
+
       setState(() {
-        if (data['clientName'] != null) {
-          _clientName = data['clientName'];
-          prefs.setString('client_name', _clientName);
+        if (mapData['clientCanMute'] != null) {
+          _clientCanMute = mapData['clientCanMute'] as bool;
         }
-        if (data['adminName'] != null) {
-          _adminName = data['adminName'];
-          prefs.setString('admin_name', _adminName);
+        if (mapData['showCallLogsToClient'] != null) {
+          _showCallLogsToClient = mapData['showCallLogsToClient'] as bool;
         }
       });
     });
@@ -175,17 +310,25 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
     });
 
     widget.socket.on('incoming_call', (data) {
-      if (!mounted) return;
-      if (data['callerName'] == _clientName) return;
+      if (!mounted || data == null) return;
+
+      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
+      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
+        rawData as Map,
+      );
+
+      if (mapData['callerName'] == _clientName) return;
 
       setState(() {
-        if (data['clientCanMute'] != null)
-          _clientCanMute = data['clientCanMute'];
-        if (data['showCallLogsToClient'] != null)
-          _showCallLogsToClient = data['showCallLogsToClient'];
+        if (mapData['clientCanMute'] != null) {
+          _clientCanMute = mapData['clientCanMute'] as bool;
+        }
+        if (mapData['showCallLogsToClient'] != null) {
+          _showCallLogsToClient = mapData['showCallLogsToClient'] as bool;
+        }
       });
 
-      _showFaceTimeCallDialog(Map<String, dynamic>.from(data));
+      _showFaceTimeCallDialog(mapData);
     });
   }
 
@@ -222,7 +365,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                     radius: 55,
                     backgroundColor: Colors.grey[800],
                     child: Text(
-                      data['callerName'][0].toUpperCase(),
+                      (data['callerName'] as String)[0].toUpperCase(),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 40,
@@ -232,7 +375,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    data['callerName'],
+                    data['callerName'] as String,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 32,
@@ -327,6 +470,8 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       _editingIndex = null;
     } else {
       final messageData = {
+        'id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
         'sender': _clientName,
         'message': _messageController.text.trim(),
       };
