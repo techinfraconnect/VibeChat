@@ -298,8 +298,9 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
 
     widget.socket.on('cancel_call', (_) async {
       if (!mounted) return;
-      // PRO FIX: Brutally kill the system tray notification if the app happens to be open
-      await FlutterLocalNotificationsPlugin().cancel(8888);
+
+      // PRO FIX: Clean up any lingering system tray notifications if the app is open
+      await FlutterLocalNotificationsPlugin().cancelAll();
 
       if (_activeCallDialogContext != null) {
         Navigator.of(_activeCallDialogContext!).pop();

@@ -15,62 +15,12 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     await Firebase.initializeApp();
   } catch (_) {}
-  print("Handling background message: ${message.messageId}");
-
-  // PRO FIX 1: Re-initialize plugin inside the background isolate memory space!
-  final isolateFlnp = FlutterLocalNotificationsPlugin();
-  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  await isolateFlnp.initialize(
-    const InitializationSettings(android: androidInit),
-  );
-
-  const channel = AndroidNotificationChannel(
-    'vibechat_channel',
-    'VibeChat Notifications',
-    importance: Importance.max,
-    playSound: true,
-  );
-  await isolateFlnp
-      .resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin
-      >()
-      ?.createNotificationChannel(channel);
-
-  // PRO FIX 2: Silent Push interceptor to kill ringing notification
-  if (message.data['type'] == 'cancel_call') {
-    await isolateFlnp.cancel(8888); // Instantly removes missed call ring
-    return;
-  }
-
-  final title =
-      message.notification?.title ?? message.data['title'] ?? 'VibeChat Admin';
-  final body =
-      message.notification?.body ?? message.data['body'] ?? 'New Notification';
-  final isCall = message.data['type'] == 'call';
-
-  const androidDetails = AndroidNotificationDetails(
-    'vibechat_channel',
-    'VibeChat Notifications',
-    channelDescription: 'Notifications for incoming messages and calls',
-    importance: Importance.max,
-    priority: Priority.high,
-    playSound: true,
-    fullScreenIntent: true,
-  );
-
-  int notifId = isCall ? 8888 : DateTime.now().millisecond;
-
-  await isolateFlnp.show(
-    notifId,
-    title,
-    body,
-    const NotificationDetails(android: androidDetails),
-  );
+  // PRO FIX: Leave this empty! Google Play Services natively displays the notification
+  // because we used the `notification` block on the server. No Dart crashes!
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   try {
     await Firebase.initializeApp().timeout(const Duration(seconds: 3));
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -91,7 +41,6 @@ void main() async {
     importance: Importance.max,
     playSound: true,
   );
-
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin
@@ -118,7 +67,6 @@ class AdminApp extends StatelessWidget {
 
 class MainChatWrapper extends StatefulWidget {
   const MainChatWrapper({super.key});
-
   @override
   State<MainChatWrapper> createState() => _MainChatWrapperState();
 }
@@ -168,33 +116,27 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
         socket.emit('register_fcm_token', {'role': userRole, 'token': token});
 
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        if (message.data['type'] == 'cancel_call') {
-          flutterLocalNotificationsPlugin.cancel(8888);
+        if (message.data['type'] == 'call' ||
+            message.data['type'] == 'cancel_call')
           return;
-        }
 
         final title =
             message.notification?.title ??
             message.data['title'] ??
             'New Message';
         final body = message.notification?.body ?? message.data['body'] ?? '';
-        final isCall = message.data['type'] == 'call';
-        int notifId = isCall ? 8888 : DateTime.now().millisecond;
 
         const AndroidNotificationDetails androidDetails =
             AndroidNotificationDetails(
               'vibechat_channel',
               'VibeChat Notifications',
-              channelDescription:
-                  'Notifications for incoming messages and calls',
               importance: Importance.max,
               priority: Priority.high,
               playSound: true,
-              fullScreenIntent: true,
             );
 
         flutterLocalNotificationsPlugin.show(
-          notifId,
+          DateTime.now().millisecond,
           title,
           body,
           const NotificationDetails(android: androidDetails),
