@@ -4,10 +4,12 @@ const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
 
-// Automatically picks up the Secret File mounted by Render or local file
 const serviceAccount = require('./serviceAccountKey.json');
 
-admin.initializeApp({ credential: cert(serviceAccount) });
+admin.initializeApp({
+  credential: cert(serviceAccount)
+});
+
 console.log("🔥 Firebase initialized successfully via Secret File.");
 
 const app = express();
@@ -17,10 +19,13 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-let clientCanMute = true, showCallLogsToClient = true;
-let adminName = "Admin", clientName = "Client";
-let chatHistory = [], callLogs = [], offlineMessages = [];   
-let registeredTokens = {}; 
+let clientCanMute = true;
+let showCallLogsToClient = true;
+let adminName = "Admin";
+let clientName = "Client";
+let chatHistory = [];             
+let callLogs = [];                  
+let offlineMessages = [];   
 
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
@@ -34,10 +39,6 @@ io.on('connection', (socket) => {
     offlineMessages.forEach(msg => socket.emit('receive_message', msg));
     offlineMessages = [];
   }
-
-  socket.on('register_fcm_token', (data) => {
-    if (data.role && data.token) registeredTokens[data.role] = data.token;
-  });
 
   socket.on('update_settings', (data) => {
     if (data.clientCanMute !== undefined) clientCanMute = data.clientCanMute;
@@ -54,11 +55,12 @@ io.on('connection', (socket) => {
   socket.on('send_message', (data) => {
     data.id = data.id || Date.now().toString();
     data.timestamp = data.timestamp || Date.now();
+
     chatHistory.push(data);
-    
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
       const targetRole = (data.sender === adminName) ? 'client' : 'admin';
+      // PRO FIX: Sending to FCM Topic directly. No lost tokens!
       sendPushNotification(targetRole, `Message from ${data.sender}`, data.message, { type: 'chat', sender: data.sender });
     } else {
       socket.broadcast.emit('receive_message', data);
@@ -66,7 +68,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('edit_message', (data) => {
-    if (data.index < chatHistory.length) chatHistory[data.index].message = data.message;
+    if (data.index < chatHistory.length) {
+      chatHistory[data.index].message = data.message;
+    }
     socket.broadcast.emit('edit_message', data);
   });
 
@@ -91,7 +95,7 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
 
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
-    sendPushNotification(targetRole, "Incoming Call...", `${data.callerName} is calling`, {
+    sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`, {
       type: 'call', callerName: data.callerName, isVideoCall: data.isVideoCall ? 'true' : 'false'
     });
   });
@@ -113,9 +117,9 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
 
-    // PRO FIX: Native Overwrite. Using the exact same TAG replaces the "Incoming Call" notification instantly.
-    sendPushNotification('client', 'Missed Call', 'Call was cancelled', { type: 'cancel_call' });
-    sendPushNotification('admin', 'Missed Call', 'Call was cancelled', { type: 'cancel_call' });
+    // Cancel triggers to BOTH topics to brutally guarantee the ringing stops
+    sendPushNotification('client', 'Call Cancelled', 'Missed Call', { type: 'cancel_call' });
+    sendPushNotification('admin', 'Call Cancelled', 'Missed Call', { type: 'cancel_call' });
   });
 
   socket.on('clear_call_logs', () => {
@@ -133,42 +137,40 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
   });
 
-  socket.on('disconnect', () => console.log(`🔴 DEVICE DISCONNECTED: ${socket.id}`));
+  socket.on('disconnect', () => {
+    console.log(`🔴 DEVICE DISCONNECTED: ${socket.id}`);
+  });
 });
 
-function sendPushNotification(role, title, body, additionalData = {}) {
-  const token = registeredTokens[role];
-  if (!token) return;
+// PRO FIX: Payload Architecture Split
+function sendPushNotification(topicRole, title, body, additionalData = {}) {
+  const isCallEvent = additionalData.type === 'call' || additionalData.type === 'cancel_call';
+  let message;
 
-  const isCall = additionalData.type === 'call' || additionalData.type === 'cancel_call';
-
-  // PRO FIX: Using 'notification' object guarantees Google Play Services will wake the Vivo/Honor screen
-  const message = {
-    notification: {
-      title: String(title || 'VibeChat'),
-      body: String(body || 'New Notification'),
-    },
-    android: {
-      priority: 'high',
-      ttl: 0,
-      notification: {
-        channelId: 'vibechat_channel',
-        clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-        sound: 'default',
-        tag: isCall ? 'call_alert_tag' : undefined // Magic Key: Overwrites the ghost ring automatically
-      }
-    },
-    apns: {
-      headers: { 'apns-collapse-id': isCall ? 'call_alert_tag' : undefined },
-      payload: { aps: { sound: 'default' } }
-    },
-    data: { ...additionalData },
-    token: token
-  };
+  if (isCallEvent) {
+    // 1. DATA-ONLY PAYLOAD FOR CALLS: Forces Android to wake up the background Dart isolate
+    message = {
+      topic: topicRole,
+      data: { title: String(title), body: String(body), ...additionalData },
+      android: { priority: 'high', ttl: 0 },
+      apns: { headers: { 'apns-priority': '10' }, payload: { aps: { contentAvailable: true } } }
+    };
+  } else {
+    // 2. STANDARD PAYLOAD FOR CHATS: Relies on native OS display for 100% reliable message banners
+    message = {
+      topic: topicRole,
+      notification: { title: String(title), body: String(body) },
+      data: { click_action: 'FLUTTER_NOTIFICATION_CLICK', ...additionalData },
+      android: { priority: 'high' }
+    };
+  }
 
   admin.messaging().send(message)
-    .then((response) => console.log(`📩 Guaranteed OS Push sent to ${role}:`, response))
+    .then((response) => console.log(`📩 Sent to Topic [${topicRole}]:`, response))
     .catch((error) => console.log('❌ FCM Error:', error));
 }
 
-server.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log(`🚀 VibeChat Server RUNNING`));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 VibeChat Server RUNNING on port ${PORT}`);
+});
