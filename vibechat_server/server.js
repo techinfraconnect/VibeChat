@@ -3,8 +3,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
+const { v4: uuidv4 } = require('uuid');
 
-// Automatically picks up the Secret File mounted by Render or local file
 const serviceAccount = require('./serviceAccountKey.json');
 
 admin.initializeApp({
@@ -27,7 +27,7 @@ let clientName = "Client";
 let chatHistory = [];             
 let callLogs = [];                  
 let offlineMessages = [];   
-let registeredTokens = {}; // PRO FIX: Restored dual-storage (Topic + Token map) for bulletproof delivery
+let registeredTokens = {}; 
 
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
@@ -42,7 +42,6 @@ io.on('connection', (socket) => {
     offlineMessages = [];
   }
 
-  // PRO FIX: Register device token alongside topics
   socket.on('register_fcm_token', (data) => {
     if (data.role && data.token) {
       registeredTokens[data.role] = data.token;
@@ -86,6 +85,7 @@ io.on('connection', (socket) => {
   socket.on('call_invite', (data) => {
     data.clientCanMute = clientCanMute;
     data.showCallLogsToClient = showCallLogsToClient;
+    data.callId = data.callId || uuidv4(); // Generate unique Call ID
     
     const now = new Date();
     const formattedDate = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
@@ -105,7 +105,10 @@ io.on('connection', (socket) => {
 
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
     sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`, {
-      type: 'call', callerName: data.callerName, isVideoCall: data.isVideoCall ? 'true' : 'false'
+      type: 'call', 
+      callId: data.callId,
+      callerName: data.callerName, 
+      isVideoCall: data.isVideoCall ? 'true' : 'false'
     });
   });
 
@@ -121,13 +124,14 @@ io.on('connection', (socket) => {
     io.emit('call_logs_update', callLogs);
   });
 
-  socket.on('cancel_call', () => {
+  socket.on('cancel_call', (data) => {
     if (callLogs.length > 0 && callLogs[0].status === 'Missed') callLogs[0].status = 'Cancelled';
     socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
 
-    sendPushNotification('client', 'Call Cancelled', 'Missed Call', { type: 'cancel_call' });
-    sendPushNotification('admin', 'Call Cancelled', 'Missed Call', { type: 'cancel_call' });
+    const callId = data?.callId || '';
+    sendPushNotification('client', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId });
+    sendPushNotification('admin', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId });
   });
 
   socket.on('clear_call_logs', () => {
@@ -150,12 +154,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// PRO FIX: Validated FCM Payload structure for both Token and Topic fallback delivery
 function sendPushNotification(role, title, body, additionalData = {}) {
   const token = registeredTokens[role];
   const isCallEvent = additionalData.type === 'call' || additionalData.type === 'cancel_call';
 
-  // Convert all data entries to strings (Firebase requirement)
   const stringifiedData = {};
   for (const key in additionalData) {
     stringifiedData[key] = String(additionalData[key]);
@@ -167,15 +169,14 @@ function sendPushNotification(role, title, body, additionalData = {}) {
     data: stringifiedData,
     android: {
       priority: 'high',
-      ttl: isCallEvent ? 0 : 3600000 // 0 TTL for instant call drops, 1 hr for chat
+      ttl: isCallEvent ? 0 : 3600000 
     }
   };
 
-  // If a direct token exists, send to token. Otherwise, fan out to the topic.
   if (token) {
     message.token = token;
   } else {
-    message.topic = role; // 'admin' or 'client'
+    message.topic = role; 
   }
 
   admin.messaging().send(message)
