@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
 
+// Automatically picks up the Secret File mounted by Render or local file
 const serviceAccount = require('./serviceAccountKey.json');
 
 admin.initializeApp({
@@ -26,6 +27,7 @@ let clientName = "Client";
 let chatHistory = [];             
 let callLogs = [];                  
 let offlineMessages = [];   
+let registeredTokens = {}; // PRO FIX: Restored dual-storage (Topic + Token map) for bulletproof delivery
 
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
@@ -39,6 +41,14 @@ io.on('connection', (socket) => {
     offlineMessages.forEach(msg => socket.emit('receive_message', msg));
     offlineMessages = [];
   }
+
+  // PRO FIX: Register device token alongside topics
+  socket.on('register_fcm_token', (data) => {
+    if (data.role && data.token) {
+      registeredTokens[data.role] = data.token;
+      console.log(`📱 FCM Token registered for role: ${data.role}`);
+    }
+  });
 
   socket.on('update_settings', (data) => {
     if (data.clientCanMute !== undefined) clientCanMute = data.clientCanMute;
@@ -60,7 +70,6 @@ io.on('connection', (socket) => {
     if (io.engine.clientsCount < 2) {
       offlineMessages.push(data);
       const targetRole = (data.sender === adminName) ? 'client' : 'admin';
-      // PRO FIX: Sending to FCM Topic directly. No lost tokens!
       sendPushNotification(targetRole, `Message from ${data.sender}`, data.message, { type: 'chat', sender: data.sender });
     } else {
       socket.broadcast.emit('receive_message', data);
@@ -117,7 +126,6 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
 
-    // Cancel triggers to BOTH topics to brutally guarantee the ringing stops
     sendPushNotification('client', 'Call Cancelled', 'Missed Call', { type: 'cancel_call' });
     sendPushNotification('admin', 'Call Cancelled', 'Missed Call', { type: 'cancel_call' });
   });
@@ -142,32 +150,37 @@ io.on('connection', (socket) => {
   });
 });
 
-// PRO FIX: Payload Architecture Split
-function sendPushNotification(topicRole, title, body, additionalData = {}) {
+// PRO FIX: Validated FCM Payload structure for both Token and Topic fallback delivery
+function sendPushNotification(role, title, body, additionalData = {}) {
+  const token = registeredTokens[role];
   const isCallEvent = additionalData.type === 'call' || additionalData.type === 'cancel_call';
-  let message;
 
-  if (isCallEvent) {
-    // 1. DATA-ONLY PAYLOAD FOR CALLS: Forces Android to wake up the background Dart isolate
-    message = {
-      topic: topicRole,
-      data: { title: String(title), body: String(body), ...additionalData },
-      android: { priority: 'high', ttl: 0 },
-      apns: { headers: { 'apns-priority': '10' }, payload: { aps: { contentAvailable: true } } }
-    };
+  // Convert all data entries to strings (Firebase requirement)
+  const stringifiedData = {};
+  for (const key in additionalData) {
+    stringifiedData[key] = String(additionalData[key]);
+  }
+  stringifiedData.title = String(title || 'VibeChat');
+  stringifiedData.body = String(body || 'New Notification');
+
+  let message = {
+    data: stringifiedData,
+    android: {
+      priority: 'high',
+      ttl: isCallEvent ? 0 : 3600000 // 0 TTL for instant call drops, 1 hr for chat
+    }
+  };
+
+  // If a direct token exists, send to token. Otherwise, fan out to the topic.
+  if (token) {
+    message.token = token;
   } else {
-    // 2. STANDARD PAYLOAD FOR CHATS: Relies on native OS display for 100% reliable message banners
-    message = {
-      topic: topicRole,
-      notification: { title: String(title), body: String(body) },
-      data: { click_action: 'FLUTTER_NOTIFICATION_CLICK', ...additionalData },
-      android: { priority: 'high' }
-    };
+    message.topic = role; // 'admin' or 'client'
   }
 
   admin.messaging().send(message)
-    .then((response) => console.log(`📩 Sent to Topic [${topicRole}]:`, response))
-    .catch((error) => console.log('❌ FCM Error:', error));
+    .then((response) => console.log(`📩 FCM successfully sent to [${role}]:`, response))
+    .catch((error) => console.log('❌ FCM Sending Error:', error));
 }
 
 const PORT = process.env.PORT || 3000;
