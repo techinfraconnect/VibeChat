@@ -3,15 +3,16 @@ const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
-const { v4: uuidv4 } = require('uuid');
 
-const serviceAccount = require('./serviceAccountKey.json');
-
-admin.initializeApp({
-  credential: cert(serviceAccount)
-});
-
-console.log("🔥 Firebase initialized successfully via Secret File.");
+try {
+  const serviceAccount = require('./serviceAccountKey.json');
+  admin.initializeApp({
+    credential: cert(serviceAccount)
+  });
+  console.log("🔥 Firebase initialized successfully via Secret File.");
+} catch (e) {
+  console.error("❌ Firebase Initialization Error:", e.message);
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -45,7 +46,7 @@ io.on('connection', (socket) => {
   socket.on('register_fcm_token', (data) => {
     if (data.role && data.token) {
       registeredTokens[data.role] = data.token;
-      console.log(`📱 FCM Token registered for role: ${data.role}`);
+      console.log(`📱 FCM Token registered for role [${data.role}]: ${data.token.substring(0, 15)}...`);
     }
   });
 
@@ -66,13 +67,13 @@ io.on('connection', (socket) => {
     data.timestamp = data.timestamp || Date.now();
 
     chatHistory.push(data);
-    if (io.engine.clientsCount < 2) {
-      offlineMessages.push(data);
-      const targetRole = (data.sender === adminName) ? 'client' : 'admin';
-      sendPushNotification(targetRole, `Message from ${data.sender}`, data.message, { type: 'chat', sender: data.sender });
-    } else {
-      socket.broadcast.emit('receive_message', data);
-    }
+    socket.broadcast.emit('receive_message', data);
+
+    const targetRole = (data.sender === adminName) ? 'client' : 'admin';
+    sendPushNotification(targetRole, `Message from ${data.sender}`, data.message, { 
+      type: 'chat', 
+      sender: data.sender 
+    });
   });
 
   socket.on('edit_message', (data) => {
@@ -85,14 +86,14 @@ io.on('connection', (socket) => {
   socket.on('call_invite', (data) => {
     data.clientCanMute = clientCanMute;
     data.showCallLogsToClient = showCallLogsToClient;
-    data.callId = data.callId || uuidv4(); // Generate unique Call ID
+    data.callId = data.callId || Date.now().toString();
     
     const now = new Date();
     const formattedDate = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
     const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     const logEntry = {
-      id: Date.now().toString(),
+      id: data.callId,
       caller: data.callerName,
       type: data.isVideoCall ? 'WhatsApp Video' : 'WhatsApp Audio',
       status: 'Missed',
@@ -165,23 +166,45 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   stringifiedData.title = String(title || 'VibeChat');
   stringifiedData.body = String(body || 'New Notification');
 
-  let message = {
-    data: stringifiedData,
-    android: {
-      priority: 'high',
-      ttl: isCallEvent ? 0 : 3600000 
-    }
-  };
+  let message = {};
+
+  if (isCallEvent) {
+    // 📞 Call: Data-only payload to trigger CallKit and background waker
+    message = {
+      data: stringifiedData,
+      android: {
+        priority: 'high',
+        ttl: 0
+      }
+    };
+  } else {
+    // 💬 Chat: Standard Notification Payload so Google Play displays banner natively
+    message = {
+      notification: {
+        title: String(title),
+        body: String(body)
+      },
+      data: stringifiedData,
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'vibechat_channel',
+          priority: 'high',
+          defaultSound: true
+        }
+      }
+    };
+  }
 
   if (token) {
     message.token = token;
   } else {
-    message.topic = role; 
+    message.topic = role; // Fallback to topic
   }
 
   admin.messaging().send(message)
-    .then((response) => console.log(`📩 FCM successfully sent to [${role}]:`, response))
-    .catch((error) => console.log('❌ FCM Sending Error:', error));
+    .then((response) => console.log(`📩 FCM sent to [${role}]:`, response))
+    .catch((error) => console.log('❌ FCM Sending Error:', error.message));
 }
 
 const PORT = process.env.PORT || 3000;
