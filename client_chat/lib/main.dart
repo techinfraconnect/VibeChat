@@ -4,9 +4,14 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+
+// PRO FIX: Explicit imports clear the "CallKitParams isn't defined" compiler errors
+import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
+import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 import 'package:flutter_callkit_incoming/entities/notification_params.dart';
+
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import 'screens/client_chat_screen.dart';
@@ -20,6 +25,26 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     await Firebase.initializeApp();
   } catch (_) {}
+  print("Handling background message: ${message.messageId}");
+
+  final isolateFlnp = FlutterLocalNotificationsPlugin();
+  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+  await isolateFlnp.initialize(
+    const InitializationSettings(android: androidInit),
+  );
+
+  const channel = AndroidNotificationChannel(
+    'vibechat_channel',
+    'VibeChat Notifications',
+    description: 'Notifications for incoming messages and calls',
+    importance: Importance.max,
+    playSound: true,
+  );
+  await isolateFlnp
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
+      ?.createNotificationChannel(channel);
 
   final data = message.data;
   if (data.isEmpty) {
@@ -28,6 +53,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   if (data['type'] == 'cancel_call') {
     await FlutterCallkitIncoming.endAllCalls();
+    await isolateFlnp.cancel(8888);
     return;
   }
 
@@ -56,6 +82,22 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         backgroundColor: '#0955fa',
         actionColor: '#4CAF50',
       ),
+      ios: const IOSParams(
+        iconName: 'CallKitLogo',
+        handleType: 'generic',
+        supportsVideo: true,
+        maximumCallGroups: 2,
+        maximumCallsPerCallGroup: 1,
+        audioSessionMode: 'default',
+        audioSessionActive: true,
+        audioSessionPreferredSampleRate: 44100.0,
+        audioSessionPreferredIOBufferDuration: 0.005,
+        supportsDTMF: true,
+        supportsHolding: true,
+        supportsGrouping: false,
+        supportsUngrouping: false,
+        ringtonePath: 'system_ringtone_default',
+      ),
     );
 
     await FlutterCallkitIncoming.showCallkitIncoming(callKitParams);
@@ -64,6 +106,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   try {
     await Firebase.initializeApp().timeout(const Duration(seconds: 3));
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -84,6 +127,7 @@ void main() async {
     importance: Importance.max,
     playSound: true,
   );
+
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin
@@ -140,22 +184,34 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
     socket.onConnect((_) {
       print('🟢 Connected to server successfully!');
       if (mounted) {
-        setState(() => isConnected = true);
+        setState(() {
+          isConnected = true;
+        });
       }
       _initializePushNotifications();
     });
 
-    socket.onConnectError((err) => print('❌ Connect Error: $err'));
-    socket.onError((err) => print('❌ Error: $err'));
+    socket.onConnectError((err) {
+      print('❌ Connect Error: $err');
+    });
+
+    socket.onError((err) {
+      print('❌ Error: $err');
+    });
+
     socket.onDisconnect((_) {
       if (mounted) {
-        setState(() => isConnected = false);
+        setState(() {
+          isConnected = false;
+        });
       }
     });
 
     Future.delayed(const Duration(seconds: 4), () {
       if (!isConnected && mounted) {
-        setState(() => isConnected = true);
+        setState(() {
+          isConnected = true;
+        });
       }
     });
   }
@@ -167,12 +223,18 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
 
       String? token = await messaging.getToken();
       if (token != null) {
+        print('📱 FCM Token retrieved: $token');
         socket.emit('register_fcm_token', {'role': 'client', 'token': token});
       }
 
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        if (message.data['type'] == 'call' ||
-            message.data['type'] == 'cancel_call') {
+        if (message.data['type'] == 'cancel_call') {
+          flutterLocalNotificationsPlugin.cancel(8888);
+          FlutterCallkitIncoming.endAllCalls();
+          return;
+        }
+
+        if (message.data['type'] == 'call') {
           return;
         }
 
@@ -186,9 +248,12 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
             AndroidNotificationDetails(
               'vibechat_channel',
               'VibeChat Notifications',
+              channelDescription:
+                  'Notifications for incoming messages and calls',
               importance: Importance.max,
               priority: Priority.high,
               playSound: true,
+              fullScreenIntent: true,
             );
 
         flutterLocalNotificationsPlugin.show(
@@ -198,7 +263,9 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
           const NotificationDetails(android: androidDetails),
         );
       });
-    } catch (_) {}
+    } catch (e) {
+      print("⚠️ Notification initialization failed: $e");
+    }
   }
 
   @override
@@ -212,7 +279,19 @@ class _MainChatWrapperState extends State<MainChatWrapper> {
     if (!isConnected) {
       return const Scaffold(
         backgroundColor: Color(0xFF0C0C0E),
-        body: Center(child: CircularProgressIndicator(color: Colors.blue)),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: Colors.blue),
+              SizedBox(height: 16),
+              Text(
+                'Connecting to VibeChat Server...',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
       );
     }
     return ClientChatScreen(socket: socket);

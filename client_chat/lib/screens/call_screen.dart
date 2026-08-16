@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
@@ -19,8 +18,8 @@ class CallScreen extends StatefulWidget {
     required this.isVideoCall,
     required this.isCaller,
     required this.socket,
-    this.clientCanMute = true,
-    this.isAdmin = false,
+    required this.clientCanMute,
+    required this.isAdmin,
   });
 
   @override
@@ -28,286 +27,240 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
-  RTCPeerConnection? _peerConnection;
-  MediaStream? _localStream;
+  bool _isMuted = false;
+  bool _isVideoOff = false;
+  late bool _isSpeakerOn;
+  bool _isFrontCamera = true;
+  bool _isRemoteConnected = false;
+
+  String _callStatus = "Connecting...";
+
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
 
-  bool _isConnecting = true;
-  bool _isMuted = false;
-  bool _isSpeakerOn = false; // Tracks speaker vs earpiece state
-  bool _isFrontCamera = true;
-  late bool _canMute;
+  RTCPeerConnection? _peerConnection;
+  MediaStream? _localStream;
 
-  double _pipTop = 60.0;
-  double _pipLeft = -1.0;
-
+  final List<RTCIceCandidate> _queuedRemoteCandidates = [];
   bool _isRemoteDescriptionSet = false;
-  final List<RTCIceCandidate> _remoteCandidatesQueue = [];
-  bool _isDisposed = false;
+
+  Offset _pipPosition = const Offset(20, 20);
+
+  final Map<String, dynamic> _peerConnectionConfig = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {
+        'urls': 'turn:global.relay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:global.relay.metered.ca:443',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+    ],
+    'sdpSemantics': 'unified-plan',
+  };
+
+  final Map<String, dynamic> _offerSdpConstraints = {
+    "mandatory": {"OfferToReceiveAudio": true, "OfferToReceiveVideo": true},
+    "optional": [],
+  };
+
+  String get myName => widget.isAdmin ? 'Admin' : 'Client';
 
   @override
   void initState() {
     super.initState();
-    _canMute = widget.clientCanMute;
-    _initRenderers();
-    _initWebRTC();
-  }
-
-  Future<void> _initRenderers() async {
-    await _localRenderer.initialize();
-    await _remoteRenderer.initialize();
-  }
-
-  Future<void> _initWebRTC() async {
-    // 1. Audio routing configuration: 
-    // Audio calls default to earpiece (false), video calls default to speakerphone (true)
     _isSpeakerOn = widget.isVideoCall;
-    await Helper.setSpeakerphoneOn(_isSpeakerOn);
+    _initCallSession();
+  }
 
-    // 2. Video constraints optimization to prevent video lagging
-    _localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
-      'video': widget.isVideoCall
-          ? {
-              'mandatory': {
-                'minWidth': '640',
-                'minHeight': '480',
-                'minFrameRate': '30',
-                'maxWidth': '1280',
-                'maxHeight': '720',
-                'maxFrameRate': '30',
-              },
-              'facingMode': 'user',
-            }
-          : false,
-    });
-    _localRenderer.srcObject = _localStream;
+  Future<void> _initCallSession() async {
+    try {
+      await _localRenderer.initialize();
+      await _remoteRenderer.initialize();
 
-    Map<String, dynamic> configuration = {
-      "iceServers": [
-        {"urls": "stun:stun.l.google.com:19302"},
-        {
-          "urls": "turn:openrelay.metered.ca:80",
-          "username": "openrelayproject",
-          "credential": "openrelayproject",
-        },
-        {
-          "urls": "turn:openrelay.metered.ca:443",
-          "username": "openrelayproject",
-          "credential": "openrelayproject",
-        },
-      ],
-    };
-
-    _peerConnection = await createPeerConnection(configuration);
-
-    _localStream?.getTracks().forEach((track) {
-      _peerConnection?.addTrack(track, _localStream!);
-    });
-
-    _peerConnection?.onTrack = (RTCTrackEvent event) {
-      if (event.streams.isNotEmpty && mounted && !_isDisposed) {
+      await _startLocalStream();
+      _setupSignalingListeners();
+    } catch (e) {
+      debugPrint('❌ FATAL INIT ERROR: $e');
+      if (mounted) {
         setState(() {
-          _remoteRenderer.srcObject = event.streams[0];
-          _isConnecting = false;
+          _callStatus = "Hardware Error";
         });
       }
-    };
+    }
+  }
 
-    _peerConnection?.onAddStream = (MediaStream stream) {
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _remoteRenderer.srcObject = stream;
-          _isConnecting = false;
-        });
+  Future<void> _startLocalStream() async {
+    try {
+      final Map<String, dynamic> mediaConstraints = {
+        'audio': true,
+        'video': widget.isVideoCall ? {'facingMode': 'user'} : false,
+      };
+
+      _localStream = await navigator.mediaDevices.getUserMedia(
+        mediaConstraints,
+      );
+      _localRenderer.srcObject = _localStream;
+
+      await _createPeerConnection();
+
+      if (!widget.isCaller) {
+        _sendSignal('call_accepted', {});
       }
-    };
+    } catch (e) {
+      debugPrint("Media Error: $e");
+      _endCallLocally();
+    }
+  }
 
-    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      widget.socket.emit('ice-candidate', {
+  Future<void> _createPeerConnection() async {
+    _peerConnection = await createPeerConnection(_peerConnectionConfig);
+
+    _peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
+      _sendSignal('ice-candidate', {
         'candidate': candidate.candidate,
         'sdpMid': candidate.sdpMid,
         'sdpMLineIndex': candidate.sdpMLineIndex,
       });
     };
 
-    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
-      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
-        if (mounted && !_isDisposed) setState(() => _isConnecting = false);
+    _peerConnection!.onConnectionState = (RTCPeerConnectionState state) {
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        if (mounted) {
+          setState(() {
+            _isRemoteConnected = true;
+            _callStatus = "Connected Live";
+          });
+        }
       }
     };
 
-    _setupSocketListeners();
+    _peerConnection!.onAddStream = (MediaStream stream) {
+      _remoteRenderer.srcObject = stream;
+      if (mounted) {
+        setState(() {
+          _isRemoteConnected = true;
+          _callStatus = "Connected Live";
+        });
+      }
+    };
 
-    if (!widget.isCaller) {
-      widget.socket.emit('call_accepted');
+    if (_localStream != null) {
+      for (var track in _localStream!.getTracks()) {
+        await _peerConnection!.addTrack(track, _localStream!);
+      }
     }
   }
 
-  void _setupSocketListeners() {
-    widget.socket.on('call_ready_for_offer', (_) async {
-      if (widget.isCaller && _peerConnection != null) {
-        RTCSessionDescription offer = await _peerConnection!.createOffer();
+  void _sendSignal(String type, Map<String, dynamic> data) {
+    widget.socket.emit('send_message', {
+      'sender': 'SYSTEM_SIGNAL',
+      'fromDevice': myName,
+      'signalType': type,
+      'data': data,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  void _setupSignalingListeners() {
+    widget.socket.on('receive_message', _onSignalReceived);
+  }
+
+  void _onSignalReceived(dynamic payload) async {
+    if (!mounted) {
+      return;
+    }
+    try {
+      final msg = Map<String, dynamic>.from(
+        payload is List ? payload.first : payload,
+      );
+
+      if (msg['sender'] != 'SYSTEM_SIGNAL') {
+        return;
+      }
+      if (msg['fromDevice'] == myName) {
+        return;
+      }
+
+      String type = msg['signalType'] ?? '';
+
+      Map<String, dynamic> data = msg['data'] != null
+          ? Map<String, dynamic>.from(msg['data'] as Map)
+          : <String, dynamic>{};
+
+      if (type == 'call_accepted' && widget.isCaller) {
+        RTCSessionDescription offer = await _peerConnection!.createOffer(
+          _offerSdpConstraints,
+        );
         await _peerConnection!.setLocalDescription(offer);
-        widget.socket.emit('offer', {'sdp': offer.sdp, 'type': offer.type});
-      }
-    });
-
-    widget.socket.on('offer', (data) async {
-      if (!widget.isCaller && _peerConnection != null) {
+        _sendSignal('offer', {'sdp': offer.sdp, 'type': offer.type});
+      } else if (type == 'offer') {
         await _peerConnection!.setRemoteDescription(
           RTCSessionDescription(data['sdp'], data['type']),
         );
         _isRemoteDescriptionSet = true;
-        _processCandidateQueue();
-
-        RTCSessionDescription answer = await _peerConnection!.createAnswer();
+        RTCSessionDescription answer = await _peerConnection!.createAnswer(
+          _offerSdpConstraints,
+        );
         await _peerConnection!.setLocalDescription(answer);
-        widget.socket.emit('answer', {'sdp': answer.sdp, 'type': answer.type});
-      }
-    });
-
-    widget.socket.on('answer', (data) async {
-      if (widget.isCaller && _peerConnection != null) {
+        _sendSignal('answer', {'sdp': answer.sdp, 'type': answer.type});
+        _processIceQueue();
+      } else if (type == 'answer') {
         await _peerConnection!.setRemoteDescription(
           RTCSessionDescription(data['sdp'], data['type']),
         );
         _isRemoteDescriptionSet = true;
-        _processCandidateQueue();
-      }
-    });
-
-    widget.socket.on('ice-candidate', (data) async {
-      if (data['candidate'] != null && _peerConnection != null) {
+        _processIceQueue();
+      } else if (type == 'ice-candidate') {
         RTCIceCandidate candidate = RTCIceCandidate(
           data['candidate'],
           data['sdpMid'],
-          data['sdpMLineIndex'],
+          data['sdpMLineIndex'] != null
+              ? int.tryParse(data['sdpMLineIndex'].toString())
+              : null,
         );
-
         if (_isRemoteDescriptionSet) {
           await _peerConnection!.addCandidate(candidate);
         } else {
-          _remoteCandidatesQueue.add(candidate);
+          _queuedRemoteCandidates.add(candidate);
         }
+      } else if (type == 'end-call' || type == 'call_rejected') {
+        _endCallLocally();
       }
-    });
-
-    widget.socket.on('update_settings', (data) {
-      if (!mounted || _isDisposed) return;
-      setState(() {
-        _canMute = data['clientCanMute'] ?? true;
-        if (!widget.isAdmin && !_canMute && _isMuted) {
-          _toggleMute();
-        }
-      });
-    });
-
-    widget.socket.on('end-call', (_) => _endCallLocally());
-    widget.socket.on('call_rejected', (_) => _endCallLocally());
-    widget.socket.on('cancel_call', (_) => _endCallLocally());
+    } catch (e) {
+      debugPrint("Signaling process error: $e");
+    }
   }
 
-  void _processCandidateQueue() {
-    for (var candidate in _remoteCandidatesQueue) {
+  void _processIceQueue() {
+    for (var candidate in _queuedRemoteCandidates) {
       _peerConnection!.addCandidate(candidate);
     }
-    _remoteCandidatesQueue.clear();
-  }
-
-  Future<void> _toggleMute() async {
-    if (!widget.isAdmin && !_canMute) return;
-
-    if (_localStream != null && _localStream!.getAudioTracks().isNotEmpty) {
-      bool newState = !_isMuted;
-      _localStream!.getAudioTracks()[0].enabled = !newState;
-
-      var senders = await _peerConnection!.getSenders();
-      for (var sender in senders) {
-        if (sender.track?.kind == 'audio') {
-          sender.track?.enabled = !newState;
-        }
-      }
-
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _isMuted = newState;
-        });
-      }
-    }
-  }
-
-  // Toggle between Earpiece and Speakerphone
-  Future<void> _toggleSpeaker() async {
-    bool newSpeakerState = !_isSpeakerOn;
-    await Helper.setSpeakerphoneOn(newSpeakerState);
-    if (mounted && !_isDisposed) {
-      setState(() {
-        _isSpeakerOn = newSpeakerState;
-      });
-    }
-  }
-
-  void _toggleCamera() async {
-    if (_localStream != null && _localStream!.getVideoTracks().isNotEmpty) {
-      final videoTrack = _localStream!.getVideoTracks().first;
-      await Helper.switchCamera(videoTrack);
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _isFrontCamera = !_isFrontCamera;
-        });
-      }
-    }
-  }
-
-  void _endCall() {
-    // Fixes ringing sync bug when caller hangs up before pickup
-    widget.socket.emit('cancel_call');
-    widget.socket.emit('end-call');
-    _endCallLocally();
+    _queuedRemoteCandidates.clear();
   }
 
   void _endCallLocally() {
-    if (_isDisposed) return;
-    _isDisposed = true;
-
-    try {
-      _localStream?.getTracks().forEach((track) => track.stop());
-      _peerConnection?.close();
-    } catch (_) {}
-
-    widget.socket.off('call_ready_for_offer');
-    widget.socket.off('offer');
-    widget.socket.off('answer');
-    widget.socket.off('ice-candidate');
-    widget.socket.off('update_settings');
-    widget.socket.off('end-call');
-    widget.socket.off('call_rejected');
-    widget.socket.off('cancel_call');
-
+    _sendSignal('end-call', {});
     if (mounted) {
-      Navigator.of(context).pop();
+      Navigator.pop(context);
     }
   }
 
   @override
   void dispose() {
-    _isDisposed = true;
-    try {
-      _localStream?.getTracks().forEach((track) => track.stop());
-      _peerConnection?.close();
-    } catch (_) {}
-
-    widget.socket.off('call_ready_for_offer');
-    widget.socket.off('offer');
-    widget.socket.off('answer');
-    widget.socket.off('ice-candidate');
-    widget.socket.off('update_settings');
-    widget.socket.off('end-call');
-    widget.socket.off('call_rejected');
-    widget.socket.off('cancel_call');
-
+    widget.socket.off('receive_message', _onSignalReceived);
+    if (_localStream != null) {
+      for (var track in _localStream!.getTracks()) {
+        track.stop();
+      }
+      _localStream!.dispose();
+    }
+    _peerConnection?.close();
+    _peerConnection?.dispose();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     super.dispose();
@@ -315,229 +268,179 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
-
-    if (_pipLeft == -1.0) {
-      _pipLeft = screenWidth - 130.0;
-    }
-
-    bool showMuteButton = widget.isAdmin || _canMute;
-
     return Scaffold(
-      backgroundColor: const Color(0xFF0C0C0E),
-      body: Stack(
-        children: [
-          if (!_isConnecting && widget.isVideoCall)
-            Positioned.fill(
-              child: RTCVideoView(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            if (widget.isVideoCall && _isRemoteConnected)
+              RTCVideoView(
                 _remoteRenderer,
                 objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-              ),
-            )
-          else
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        width: 1.5,
-                      ),
-                    ),
-                    child: CircleAvatar(
-                      radius: 55,
-                      backgroundColor: const Color(0xFF1C1C1E),
+              )
+            else
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 60,
+                      backgroundColor: Colors.grey[800],
                       child: Text(
                         widget.targetUser.isNotEmpty
                             ? widget.targetUser[0].toUpperCase()
-                            : "U",
+                            : 'U',
                         style: const TextStyle(
+                          fontSize: 50,
                           color: Colors.white,
-                          fontSize: 36,
-                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    widget.targetUser,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.3,
+                    const SizedBox(height: 20),
+                    Text(
+                      _callStatus,
+                      style: const TextStyle(color: Colors.white, fontSize: 18),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _isConnecting
-                        ? "Connecting..."
-                        : (widget.isVideoCall
-                            ? "Video Paused"
-                            : "Secure Audio Call"),
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.5),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w400,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          if (!_isConnecting && widget.isVideoCall)
-            Positioned(
-              left: _pipLeft,
-              top: _pipTop,
-              child: GestureDetector(
-                onPanUpdate: (details) {
-                  setState(() {
-                    _pipLeft += details.delta.dx;
-                    _pipTop += details.delta.dy;
-                    _pipLeft = _pipLeft.clamp(16.0, screenWidth - 126.0);
-                    _pipTop = _pipTop.clamp(40.0, screenHeight - 200.0);
-                  });
-                },
-                child: Container(
-                  width: 110,
-                  height: 160,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1C1C1E),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      width: 1,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.4),
-                        blurRadius: 16,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(15),
-                    child: RTCVideoView(
-                      _localRenderer,
-                      mirror: _isFrontCamera,
-                      objectFit:
-                          RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                    ),
-                  ),
+                  ],
                 ),
               ),
-            ),
-
-          Positioned(
-            bottom: 40,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(35),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            if (widget.isVideoCall && !_isVideoOff)
+              Positioned(
+                left: _pipPosition.dx,
+                top: _pipPosition.dy,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    setState(() {
+                      _pipPosition = Offset(
+                        (_pipPosition.dx + details.delta.dx).clamp(
+                          0.0,
+                          MediaQuery.of(context).size.width - 120.0,
+                        ),
+                        (_pipPosition.dy + details.delta.dy).clamp(
+                          0.0,
+                          MediaQuery.of(context).size.height - 180.0,
+                        ),
+                      );
+                    });
+                  },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 14,
-                    ),
+                    width: 110,
+                    height: 150,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2C2C2E).withValues(alpha: 0.65),
-                      borderRadius: BorderRadius.circular(35),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.12),
-                        width: 0.5,
-                      ),
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white30),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (widget.isVideoCall) ...[
-                          _buildGlassButton(
-                            icon: Icons.cameraswitch_rounded,
-                            onPressed: _toggleCamera,
-                            isActive: false,
-                          ),
-                          const SizedBox(width: 16),
-                        ],
-
-                        // Speaker / Earpiece Toggle Button
-                        _buildGlassButton(
-                          icon: _isSpeakerOn ? Icons.volume_up_rounded : Icons.hearing_rounded,
-                          onPressed: _toggleSpeaker,
-                          isActive: _isSpeakerOn,
-                        ),
-                        const SizedBox(width: 16),
-
-                        if (showMuteButton) ...[
-                          _buildGlassButton(
-                            icon: _isMuted
-                                ? Icons.mic_off_rounded
-                                : Icons.mic_rounded,
-                            onPressed: _toggleMute,
-                            isActive: _isMuted,
-                          ),
-                          const SizedBox(width: 16),
-                        ],
-
-                        _buildGlassButton(
-                          icon: Icons.call_end_rounded,
-                          onPressed: _endCall,
-                          isDestructive: true,
-                          isActive: false,
-                        ),
-                      ],
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: RTCVideoView(
+                        _localRenderer,
+                        mirror: _isFrontCamera,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
                     ),
                   ),
                 ),
               ),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 30),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    FloatingActionButton(
+                      heroTag: "mute",
+                      backgroundColor: _isMuted
+                          ? Colors.white
+                          : Colors.grey[800],
+                      onPressed: () {
+                        setState(() {
+                          _isMuted = !_isMuted;
+                          if (_localStream != null) {
+                            _localStream!.getAudioTracks()[0].enabled =
+                                !_isMuted;
+                          }
+                        });
+                      },
+                      child: Icon(
+                        _isMuted ? Icons.mic_off : Icons.mic,
+                        color: _isMuted ? Colors.black : Colors.white,
+                      ),
+                    ),
+                    FloatingActionButton(
+                      heroTag: "end",
+                      backgroundColor: Colors.red,
+                      onPressed: _endCallLocally,
+                      child: const Icon(
+                        Icons.call_end,
+                        color: Colors.white,
+                        size: 30,
+                      ),
+                    ),
+                    FloatingActionButton(
+                      heroTag: "speaker",
+                      backgroundColor: _isSpeakerOn
+                          ? Colors.white
+                          : Colors.grey[800],
+                      onPressed: () async {
+                        setState(() {
+                          _isSpeakerOn = !_isSpeakerOn;
+                        });
+                        try {
+                          await Helper.setSpeakerphoneOn(_isSpeakerOn);
+                        } catch (_) {}
+                      },
+                      child: Icon(
+                        _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
+                        color: _isSpeakerOn ? Colors.black : Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGlassButton({
-    required IconData icon,
-    required VoidCallback onPressed,
-    required bool isActive,
-    bool isDestructive = false,
-  }) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        width: 54,
-        height: 54,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: isDestructive
-              ? const Color(0xFFFF3B30)
-              : (isActive
-                  ? Colors.white
-                  : const Color(0xFF3A3A3C).withValues(alpha: 0.8)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
+            if (widget.isVideoCall)
+              Positioned(
+                top: 10,
+                right: 10,
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        _isVideoOff ? Icons.videocam_off : Icons.videocam,
+                        color: Colors.white,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _isVideoOff = !_isVideoOff;
+                          if (_localStream != null) {
+                            _localStream!.getVideoTracks()[0].enabled =
+                                !_isVideoOff;
+                          }
+                        });
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.flip_camera_ios,
+                        color: Colors.white,
+                      ),
+                      onPressed: () async {
+                        if (_localStream != null) {
+                          final track = _localStream!.getVideoTracks()[0];
+                          await Helper.switchCamera(track);
+                          setState(() {
+                            _isFrontCamera = !_isFrontCamera;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
           ],
-        ),
-        child: Icon(
-          icon,
-          color: isDestructive
-              ? Colors.white
-              : (isActive ? Colors.black : Colors.white),
-          size: 24,
         ),
       ),
     );

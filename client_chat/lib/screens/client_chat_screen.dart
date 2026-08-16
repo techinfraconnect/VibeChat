@@ -1,16 +1,20 @@
-import 'dart:ui';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+
+import 'package:flutter_callkit_incoming/entities/call_event.dart';
+import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
+import 'package:flutter_callkit_incoming/entities/android_params.dart';
+import 'package:flutter_callkit_incoming/entities/ios_params.dart';
+
 import 'call_screen.dart';
 import 'call_logs_screen.dart';
 
 class ClientChatScreen extends StatefulWidget {
   final io.Socket socket;
-
   const ClientChatScreen({super.key, required this.socket});
 
   @override
@@ -23,16 +27,14 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
 
-  List<Map<String, dynamic>> _messages = [];
-  List<Map<String, dynamic>> _callLogs = [];
+  final List<Map<String, dynamic>> _messages = [];
+  final List<Map<String, dynamic>> _callLogs = [];
 
   int? _editingIndex;
   bool _clientCanMute = true;
   bool _showCallLogsToClient = true;
-
   String _clientName = "Client";
   String _adminName = "Admin";
-  BuildContext? _activeCallDialogContext;
 
   @override
   void initState() {
@@ -53,13 +55,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         eventName = eventObj.event.toString();
       } catch (_) {}
 
-      if (eventName.isEmpty) {
-        try {
-          eventName = eventObj.name.toString();
-        } catch (_) {}
-      }
-
-      if (eventName.contains('actionCallAccept')) {
+      if (eventName.contains('CallAccept')) {
         bool isVideo = false;
         try {
           final dynamic extra = eventObj.body['extra'];
@@ -80,8 +76,8 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
             ),
           ),
         );
-      } else if (eventName.contains('actionCallDecline') ||
-          eventName.contains('actionCallTimeout')) {
+      } else if (eventName.contains('CallDecline') ||
+          eventName.contains('CallTimeout')) {
         widget.socket.emit('call_rejected');
       }
     });
@@ -94,28 +90,17 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       _adminName = prefs.getString('admin_name') ?? "Admin";
     });
 
-    final String? cachedMessages = prefs.getString('client_chat_history');
+    final cachedMessages = prefs.getString('client_chat_history');
     if (cachedMessages != null) {
       try {
         List<dynamic> decoded = jsonDecode(cachedMessages);
         setState(() {
-          _messages = decoded
-              .map((item) => Map<String, dynamic>.from(item as Map))
-              .toList();
+          _messages.clear();
+          _messages.addAll(
+            decoded.map((item) => Map<String, dynamic>.from(item as Map)),
+          );
         });
         _scrollToBottom();
-      } catch (_) {}
-    }
-
-    final String? cachedLogs = prefs.getString('client_call_logs');
-    if (cachedLogs != null) {
-      try {
-        List<dynamic> decodedLogs = jsonDecode(cachedLogs);
-        setState(() {
-          _callLogs = decodedLogs
-              .map((item) => Map<String, dynamic>.from(item as Map))
-              .toList();
-        });
       } catch (_) {}
     }
   }
@@ -123,11 +108,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   Future<void> _saveLocalMessages() async {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('client_chat_history', jsonEncode(_messages));
-  }
-
-  Future<void> _saveLocalCallLogs() async {
-    final prefs = await SharedPreferences.getInstance();
-    prefs.setString('client_call_logs', jsonEncode(_callLogs));
   }
 
   void _scrollToBottom() {
@@ -143,27 +123,13 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   }
 
   void _setupSocketListeners() {
-    widget.socket.off('chat_history');
-    widget.socket.off('receive_message');
-    widget.socket.off('edit_message');
-    widget.socket.off('call_logs');
-    widget.socket.off('call_logs_update');
-    widget.socket.off('update_settings');
-    widget.socket.off('update_names');
-    widget.socket.off('incoming_call');
-    widget.socket.off('call_rejected');
-    widget.socket.off('cancel_call');
-
     widget.socket.on('chat_history', (data) {
       if (!mounted || data == null) {
         return;
       }
-      List<dynamic> serverData = [];
-      if (data is List) {
-        serverData = (data.isNotEmpty && data.first is List)
-            ? data.first
-            : data;
-      }
+      List<dynamic> serverData = data is List
+          ? (data.isNotEmpty && data.first is List ? data.first : data)
+          : [];
       if (serverData.isEmpty) {
         return;
       }
@@ -174,17 +140,10 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
           if (item == null) {
             continue;
           }
-          final rawItem = item is List
-              ? (item.isNotEmpty ? item.first : {})
-              : item;
-          final Map<String, dynamic> sm = Map<String, dynamic>.from(
-            rawItem as Map,
+          final sm = Map<String, dynamic>.from(
+            item is List ? item.first as Map : item as Map,
           );
-
-          bool exists = _messages.any(
-            (m) => m['id'] != null && m['id'] == sm['id'],
-          );
-          if (!exists) {
+          if (!_messages.any((m) => m['id'] == sm['id'])) {
             _messages.add(sm);
             addedNew = true;
           }
@@ -193,7 +152,6 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
           (a, b) => (a['timestamp'] ?? 0).compareTo(b['timestamp'] ?? 0),
         );
       });
-
       if (addedNew) {
         _saveLocalMessages();
         _scrollToBottom();
@@ -204,16 +162,11 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       if (!mounted || data == null) {
         return;
       }
-      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
-      final Map<String, dynamic> newMsg = Map<String, dynamic>.from(
-        rawData as Map,
+      final newMsg = Map<String, dynamic>.from(
+        data is List ? data.first as Map : data as Map,
       );
-
       setState(() {
-        bool exists = _messages.any(
-          (m) => m['id'] != null && m['id'] == newMsg['id'],
-        );
-        if (!exists) {
+        if (!_messages.any((m) => m['id'] == newMsg['id'])) {
           _messages.add(newMsg);
         }
       });
@@ -221,112 +174,13 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       _scrollToBottom();
     });
 
-    widget.socket.on('edit_message', (data) {
-      if (!mounted || data == null) {
-        return;
-      }
-      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
-      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
-        rawData as Map,
-      );
-
-      setState(() {
-        int? index = mapData['index'] as int?;
-        if (index != null && index < _messages.length) {
-          _messages[index]['message'] = mapData['message'];
-        }
-      });
-      _saveLocalMessages();
-    });
-
-    widget.socket.on('call_logs', (data) {
-      if (!mounted || data == null) {
-        return;
-      }
-      List<dynamic> serverData = [];
-      if (data is List) {
-        serverData = (data.isNotEmpty && data.first is List)
-            ? data.first
-            : data;
-      }
-      if (serverData.isEmpty) {
-        return;
-      }
-
-      setState(() {
-        for (var item in serverData) {
-          if (item == null) {
-            continue;
-          }
-          final rawItem = item is List
-              ? (item.isNotEmpty ? item.first : {})
-              : item;
-          final Map<String, dynamic> log = Map<String, dynamic>.from(
-            rawItem as Map,
-          );
-
-          int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
-          if (index != -1) {
-            _callLogs[index] = log;
-          } else {
-            _callLogs.add(log);
-          }
-        }
-        _callLogs.sort((a, b) => (b['id'] ?? "").compareTo(a['id'] ?? ""));
-      });
-      _saveLocalCallLogs();
-    });
-
-    widget.socket.on('call_logs_update', (data) {
-      if (!mounted || data == null) {
-        return;
-      }
-      List<dynamic> serverData = [];
-      if (data is List) {
-        serverData = (data.isNotEmpty && data.first is List)
-            ? data.first
-            : data;
-      }
-
-      if (serverData.isEmpty) {
-        setState(() => _callLogs.clear());
-        _saveLocalCallLogs();
-        return;
-      }
-
-      setState(() {
-        for (var item in serverData) {
-          if (item == null) {
-            continue;
-          }
-          final rawItem = item is List
-              ? (item.isNotEmpty ? item.first : {})
-              : item;
-          final Map<String, dynamic> log = Map<String, dynamic>.from(
-            rawItem as Map,
-          );
-
-          int index = _callLogs.indexWhere((l) => l['id'] == log['id']);
-          if (index != -1) {
-            _callLogs[index] = log;
-          } else {
-            _callLogs.add(log);
-          }
-        }
-        _callLogs.sort((a, b) => (b['id'] ?? "").compareTo(a['id'] ?? ""));
-      });
-      _saveLocalCallLogs();
-    });
-
     widget.socket.on('update_names', (data) async {
       if (!mounted || data == null) {
         return;
       }
-      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
-      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
-        rawData as Map,
+      final mapData = Map<String, dynamic>.from(
+        data is List ? data.first as Map : data as Map,
       );
-
       final prefs = await SharedPreferences.getInstance();
       setState(() {
         if (mapData['clientName'] != null) {
@@ -344,11 +198,9 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       if (!mounted || data == null) {
         return;
       }
-      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
-      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
-        rawData as Map,
+      final mapData = Map<String, dynamic>.from(
+        data is List ? data.first as Map : data as Map,
       );
-
       setState(() {
         if (mapData['clientCanMute'] != null) {
           _clientCanMute = mapData['clientCanMute'] as bool;
@@ -359,41 +211,20 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       });
     });
 
-    widget.socket.on('call_rejected', (_) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Call Declined.."),
-          backgroundColor: Colors.red,
-        ),
-      );
-    });
-
     widget.socket.on('cancel_call', (_) async {
       if (!mounted) {
         return;
       }
-      final nav = Navigator.of(context);
-      await _localNotifications.cancelAll();
       await FlutterCallkitIncoming.endAllCalls();
-
-      if (_activeCallDialogContext != null) {
-        nav.pop();
-        _activeCallDialogContext = null;
-      }
     });
 
-    widget.socket.on('incoming_call', (data) {
+    widget.socket.on('incoming_call', (data) async {
       if (!mounted || data == null) {
         return;
       }
-      final rawData = data is List ? (data.isNotEmpty ? data.first : {}) : data;
-      final Map<String, dynamic> mapData = Map<String, dynamic>.from(
-        rawData as Map,
+      final mapData = Map<String, dynamic>.from(
+        data is List ? data.first as Map : data as Map,
       );
-
       if (mapData['callerName'] == _clientName) {
         return;
       }
@@ -407,147 +238,54 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         }
       });
 
-      _showFaceTimeCallDialog(mapData);
-    });
-  }
-
-  void _showFaceTimeCallDialog(Map<String, dynamic> data) {
-    String callerName = data['callerName']?.toString() ?? 'Caller';
-    String initial = callerName.isNotEmpty ? callerName[0].toUpperCase() : 'C';
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        _activeCallDialogContext = ctx;
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Dialog(
-            backgroundColor: Colors.transparent,
-            insetPadding: EdgeInsets.zero,
-            child: Container(
-              width: double.infinity,
-              height: double.infinity,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Color(0xFF2C2C2E),
-                    Color(0xFF1C1C1E),
-                    Color(0xFF0C0C0E),
-                  ],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Spacer(),
-                  CircleAvatar(
-                    radius: 55,
-                    backgroundColor: Colors.grey[800],
-                    child: Text(
-                      initial,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 40,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    callerName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 32,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    data['isVideoCall'] == true
-                        ? "Incoming Video Call..."
-                        : "Incoming Audio Call...",
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.6),
-                      fontSize: 18,
-                    ),
-                  ),
-                  const Spacer(),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 50,
-                      vertical: 60,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        FloatingActionButton(
-                          heroTag: "decline_call_client",
-                          backgroundColor: const Color(0xFFFF3B30),
-                          onPressed: () async {
-                            _activeCallDialogContext = null;
-                            final nav = Navigator.of(ctx);
-                            await _localNotifications.cancel(8888);
-                            nav.pop();
-                            widget.socket.emit('call_rejected');
-                          },
-                          child: const Icon(
-                            Icons.call_end,
-                            color: Colors.white,
-                            size: 30,
-                          ),
-                        ),
-                        FloatingActionButton(
-                          heroTag: "accept_call_client",
-                          backgroundColor: const Color(0xFF34C759),
-                          onPressed: () async {
-                            _activeCallDialogContext = null;
-                            final nav = Navigator.of(ctx);
-                            final parentContext = context;
-                            await _localNotifications.cancel(8888);
-                            nav.pop();
-
-                            if (mounted) {
-                              Navigator.push(
-                                parentContext,
-                                MaterialPageRoute(
-                                  builder: (context) => CallScreen(
-                                    callerName: _clientName,
-                                    targetUser: _adminName,
-                                    isVideoCall: data['isVideoCall'] ?? false,
-                                    isCaller: false,
-                                    socket: widget.socket,
-                                    clientCanMute: _clientCanMute,
-                                    isAdmin: false,
-                                  ),
-                                ),
-                              );
-                            }
-                          },
-                          child: const Icon(
-                            Icons.call,
-                            color: Colors.white,
-                            size: 30,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    ).then((_) {
-      _activeCallDialogContext = null;
+      var callKitParams = CallKitParams(
+        id:
+            mapData['callId'] ??
+            DateTime.now().millisecondsSinceEpoch.toString(),
+        nameCaller: mapData['callerName'] ?? 'Caller',
+        appName: 'VibeChat Client',
+        avatar: 'https://i.pravatar.cc/100',
+        handle: mapData['isVideoCall']?.toString() == 'true'
+            ? 'Video Call'
+            : 'Audio Call',
+        type: mapData['isVideoCall']?.toString() == 'true' ? 1 : 0,
+        duration: 30000,
+        extra: <String, dynamic>{
+          'isVideoCall': mapData['isVideoCall']?.toString(),
+          'callId': mapData['callId'],
+        },
+        android: const AndroidParams(
+          isCustomNotification: true,
+          isShowLogo: false,
+          ringtonePath: 'system_ringtone_default',
+          backgroundColor: '#0955fa',
+          actionColor: '#4CAF50',
+        ),
+        ios: const IOSParams(
+          iconName: 'CallKitLogo',
+          handleType: 'generic',
+          supportsVideo: true,
+          maximumCallGroups: 2,
+          maximumCallsPerCallGroup: 1,
+          audioSessionMode: 'default',
+          audioSessionActive: true,
+          audioSessionPreferredSampleRate: 44100.0,
+          audioSessionPreferredIOBufferDuration: 0.005,
+          supportsDTMF: true,
+          supportsHolding: true,
+          supportsGrouping: false,
+          supportsUngrouping: false,
+          ringtonePath: 'system_ringtone_default',
+        ),
+      );
+      await FlutterCallkitIncoming.showCallkitIncoming(callKitParams);
     });
   }
 
   void _handleSubmit() {
-    if (_messageController.text.trim().isEmpty) return;
+    if (_messageController.text.trim().isEmpty) {
+      return;
+    }
 
     if (_editingIndex != null) {
       setState(() {
@@ -566,7 +304,9 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         'message': _messageController.text.trim(),
       };
       widget.socket.emit('send_message', messageData);
-      setState(() => _messages.add(messageData));
+      setState(() {
+        _messages.add(messageData);
+      });
     }
     _saveLocalMessages();
     _messageController.clear();
@@ -583,11 +323,13 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
   }
 
   void _initiateCall(bool isVideo) {
+    final String callId = DateTime.now().millisecondsSinceEpoch.toString();
     widget.socket.emit('call_invite', {
       'callerName': _clientName,
       'isVideoCall': isVideo,
       'clientCanMute': _clientCanMute,
       'showCallLogsToClient': _showCallLogsToClient,
+      'callId': callId,
     });
 
     Navigator.push(
@@ -612,35 +354,14 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       backgroundColor: const Color(0xFF0C0C0E),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1C1C1E),
-        elevation: 0,
-        title: Text(
-          _clientName,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        iconTheme: const IconThemeData(color: Colors.white),
+        title: Text(_clientName, style: const TextStyle(color: Colors.white)),
         actions: [
-          if (_showCallLogsToClient)
-            IconButton(
-              icon: const Icon(Icons.history_rounded),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => CallLogsScreen(
-                    callLogs: _callLogs,
-                    onClearLogs: () => widget.socket.emit('clear_call_logs'),
-                  ),
-                ),
-              ),
-            ),
           IconButton(
-            icon: const Icon(Icons.call_rounded),
+            icon: const Icon(Icons.call_rounded, color: Colors.white),
             onPressed: () => _initiateCall(false),
           ),
           IconButton(
-            icon: const Icon(Icons.videocam_rounded),
+            icon: const Icon(Icons.videocam_rounded, color: Colors.white),
             onPressed: () => _initiateCall(true),
           ),
         ],
@@ -650,39 +371,27 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.all(16),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
                 bool isMe = msg['sender'] == _clientName;
-                return GestureDetector(
-                  onLongPress: () => _startEditing(index),
-                  child: Align(
-                    alignment: isMe
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.75,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isMe
-                            ? const Color(0xFF0A84FF)
-                            : const Color(0xFF2C2C2E),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text(
-                        msg['message'] ?? '',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          color: Colors.white,
-                        ),
-                      ),
+                return Align(
+                  alignment: isMe
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isMe
+                          ? const Color(0xFF0A84FF)
+                          : const Color(0xFF2C2C2E),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(
+                      msg['message'] ?? '',
+                      style: const TextStyle(fontSize: 16, color: Colors.white),
                     ),
                   ),
                 );
@@ -691,39 +400,29 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
           ),
           SafeArea(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1C1C1E),
-                border: Border(
-                  top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
-                ),
-              ),
+              padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 4,
-                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFF2C2C2E),
                         borderRadius: BorderRadius.circular(24),
                       ),
                       child: TextField(
                         controller: _messageController,
-                        maxLines: 5,
-                        minLines: 1,
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
                           hintText: _editingIndex != null
                               ? "Edit message..."
                               : "Type a message...",
                           hintStyle: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.4),
+                            color: Colors.white.withOpacity(0.4),
                           ),
                           border: InputBorder.none,
-                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                          ),
                         ),
                       ),
                     ),
@@ -732,18 +431,12 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                   GestureDetector(
                     onTap: _handleSubmit,
                     child: Container(
-                      padding: const EdgeInsets.all(10),
+                      padding: const EdgeInsets.all(12),
                       decoration: const BoxDecoration(
                         shape: BoxShape.circle,
                         color: Color(0xFF0A84FF),
                       ),
-                      child: Icon(
-                        _editingIndex != null
-                            ? Icons.check
-                            : Icons.send_rounded,
-                        color: Colors.white,
-                        size: 20,
-                      ),
+                      child: const Icon(Icons.send, color: Colors.white),
                     ),
                   ),
                 ],
