@@ -1,13 +1,15 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const admin = require('firebase-admin');
-const { cert } = require('firebase-admin/app');
+
+// PRO FIX: Correct modular imports for modern Firebase Admin SDK
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getMessaging } = require('firebase-admin/messaging'); 
 const { v4: uuidv4 } = require('uuid');
 
 try {
   const serviceAccount = require('./serviceAccountKey.json');
-  admin.initializeApp({ credential: cert(serviceAccount) });
+  initializeApp({ credential: cert(serviceAccount) });
   console.log("🔥 Firebase initialized successfully via Secret File.");
 } catch (e) {
   console.error("❌ Firebase Initialization Error:", e.message);
@@ -119,7 +121,6 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
 
-    // Safe extraction prevents Node.js crashes if data is null
     const callId = (data && data.callId) ? data.callId : '';
     sendPushNotification('client', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId });
     sendPushNotification('admin', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId });
@@ -154,7 +155,7 @@ function sendPushNotification(role, title, body, additionalData = {}) {
     message = {
       data: stringifiedData,
       android: { priority: 'high', ttl: 0 },
-      apns: { payload: { aps: { 'content-available': 1 } } } // Wakes iPhones
+      apns: { payload: { aps: { 'content-available': 1 } } } 
     };
   } else {
     message = {
@@ -167,7 +168,8 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   if (token) message.token = token;
   else message.topic = role;
 
-  admin.messaging().send(message).catch((error) => console.log('❌ FCM Sending Error:', error.message));
+  // PRO FIX: Using getMessaging() instead of admin.messaging()
+  getMessaging().send(message).catch((error) => console.log('❌ FCM Sending Error:', error.message));
 }
 
 const PORT = process.env.PORT || 3000;
