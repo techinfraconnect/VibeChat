@@ -3,12 +3,11 @@ const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { cert } = require('firebase-admin/app');
+const { v4: uuidv4 } = require('uuid');
 
 try {
   const serviceAccount = require('./serviceAccountKey.json');
-  admin.initializeApp({
-    credential: cert(serviceAccount)
-  });
+  admin.initializeApp({ credential: cert(serviceAccount) });
   console.log("🔥 Firebase initialized successfully via Secret File.");
 } catch (e) {
   console.error("❌ Firebase Initialization Error:", e.message);
@@ -17,9 +16,7 @@ try {
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
-});
+const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
 let clientCanMute = true;
 let showCallLogsToClient = true;
@@ -44,10 +41,7 @@ io.on('connection', (socket) => {
   }
 
   socket.on('register_fcm_token', (data) => {
-    if (data.role && data.token) {
-      registeredTokens[data.role] = data.token;
-      console.log(`📱 FCM Token registered for role [${data.role}]: ${data.token.substring(0, 15)}...`);
-    }
+    if (data.role && data.token) registeredTokens[data.role] = data.token;
   });
 
   socket.on('update_settings', (data) => {
@@ -65,28 +59,26 @@ io.on('connection', (socket) => {
   socket.on('send_message', (data) => {
     data.id = data.id || Date.now().toString();
     data.timestamp = data.timestamp || Date.now();
-
     chatHistory.push(data);
-    socket.broadcast.emit('receive_message', data);
-
-    const targetRole = (data.sender === adminName) ? 'client' : 'admin';
-    sendPushNotification(targetRole, `Message from ${data.sender}`, data.message, { 
-      type: 'chat', 
-      sender: data.sender 
-    });
+    
+    if (io.engine.clientsCount < 2) {
+      offlineMessages.push(data);
+      const targetRole = (data.sender === adminName) ? 'client' : 'admin';
+      sendPushNotification(targetRole, `Message from ${data.sender}`, data.message, { type: 'chat', sender: data.sender });
+    } else {
+      socket.broadcast.emit('receive_message', data);
+    }
   });
 
   socket.on('edit_message', (data) => {
-    if (data.index < chatHistory.length) {
-      chatHistory[data.index].message = data.message;
-    }
+    if (data.index < chatHistory.length) chatHistory[data.index].message = data.message;
     socket.broadcast.emit('edit_message', data);
   });
 
   socket.on('call_invite', (data) => {
     data.clientCanMute = clientCanMute;
     data.showCallLogsToClient = showCallLogsToClient;
-    data.callId = data.callId || Date.now().toString();
+    data.callId = data.callId || uuidv4();
     
     const now = new Date();
     const formattedDate = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
@@ -106,10 +98,7 @@ io.on('connection', (socket) => {
 
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
     sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`, {
-      type: 'call', 
-      callId: data.callId,
-      callerName: data.callerName, 
-      isVideoCall: data.isVideoCall ? 'true' : 'false'
+      type: 'call', callId: data.callId, callerName: data.callerName, isVideoCall: data.isVideoCall ? 'true' : 'false'
     });
   });
 
@@ -130,7 +119,8 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('cancel_call');
     io.emit('call_logs_update', callLogs);
 
-    const callId = data?.callId || '';
+    // Safe extraction prevents Node.js crashes if data is null
+    const callId = (data && data.callId) ? data.callId : '';
     sendPushNotification('client', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId });
     sendPushNotification('admin', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId });
   });
@@ -149,10 +139,6 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('end-call');
     io.emit('call_logs_update', callLogs);
   });
-
-  socket.on('disconnect', () => {
-    console.log(`🔴 DEVICE DISCONNECTED: ${socket.id}`);
-  });
 });
 
 function sendPushNotification(role, title, body, additionalData = {}) {
@@ -160,54 +146,29 @@ function sendPushNotification(role, title, body, additionalData = {}) {
   const isCallEvent = additionalData.type === 'call' || additionalData.type === 'cancel_call';
 
   const stringifiedData = {};
-  for (const key in additionalData) {
-    stringifiedData[key] = String(additionalData[key]);
-  }
-  stringifiedData.title = String(title || 'VibeChat');
-  stringifiedData.body = String(body || 'New Notification');
+  for (const key in additionalData) stringifiedData[key] = String(additionalData[key]);
 
   let message = {};
 
   if (isCallEvent) {
-    // 📞 Call: Data-only payload to trigger CallKit and background waker
     message = {
       data: stringifiedData,
-      android: {
-        priority: 'high',
-        ttl: 0
-      }
+      android: { priority: 'high', ttl: 0 },
+      apns: { payload: { aps: { 'content-available': 1 } } } // Wakes iPhones
     };
   } else {
-    // 💬 Chat: Standard Notification Payload so Google Play displays banner natively
     message = {
-      notification: {
-        title: String(title),
-        body: String(body)
-      },
+      notification: { title: String(title), body: String(body) },
       data: stringifiedData,
-      android: {
-        priority: 'high',
-        notification: {
-          channelId: 'vibechat_channel',
-          priority: 'high',
-          defaultSound: true
-        }
-      }
+      android: { priority: 'high' }
     };
   }
 
-  if (token) {
-    message.token = token;
-  } else {
-    message.topic = role; // Fallback to topic
-  }
+  if (token) message.token = token;
+  else message.topic = role;
 
-  admin.messaging().send(message)
-    .then((response) => console.log(`📩 FCM sent to [${role}]:`, response))
-    .catch((error) => console.log('❌ FCM Sending Error:', error.message));
+  admin.messaging().send(message).catch((error) => console.log('❌ FCM Sending Error:', error.message));
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 VibeChat Server RUNNING on port ${PORT}`);
-});
+server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server RUNNING on port ${PORT}`));
