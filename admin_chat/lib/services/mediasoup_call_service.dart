@@ -22,46 +22,58 @@ class MediasoupCallService {
   MediasoupCallService({required this.socket});
 
   // ==========================================
-  // SAFE SOCKET EMITTER WITH 8-SECOND TIMEOUT
+  // BULLETPROOF PUB/SUB REQUEST HANDLER
   // ==========================================
-  Future<dynamic> _emitWithAck(String event, dynamic data) async {
+  Future<dynamic> _request(
+    String emitEvent,
+    String listenEvent,
+    Map<String, dynamic> payload,
+  ) async {
     final completer = Completer<dynamic>();
-    debugPrint("📡 Sending socket event: $event...");
+    final reqId = "${DateTime.now().millisecondsSinceEpoch}_$emitEvent";
+    payload['reqId'] = reqId;
 
-    socket.emitWithAck(
-      event,
-      data,
-      ack: (response) {
-        debugPrint("✅ Received ack for: $event");
-        if (!completer.isCompleted) completer.complete(response);
-      },
-    );
+    debugPrint("📡 Sending $emitEvent...");
+
+    void listener(dynamic response) {
+      final res = (response is List && response.isNotEmpty)
+          ? response.first
+          : response;
+      if (res is Map && res['reqId'] == reqId) {
+        debugPrint("✅ Received $listenEvent");
+        socket.off(listenEvent, listener); // Cleanup
+
+        if (!completer.isCompleted) {
+          if (res.containsKey('error')) {
+            completer.completeError(res['error']);
+          } else {
+            completer.complete(res['data'] ?? res);
+          }
+        }
+      }
+    }
+
+    socket.on(listenEvent, listener);
+    socket.emit(emitEvent, payload);
 
     try {
       return await completer.future.timeout(const Duration(seconds: 8));
     } catch (e) {
-      debugPrint("❌ TIMEOUT waiting for $event response from server!");
-      throw Exception('Socket timeout on $event');
+      debugPrint("❌ TIMEOUT on $emitEvent!");
+      socket.off(listenEvent, listener); // Cleanup on timeout
+      throw Exception('Socket timeout on $emitEvent');
     }
   }
 
-  // ==========================================
-  // BULLETPROOF PARSERS
-  // ==========================================
   Map<String, dynamic> _extractMap(dynamic data) {
-    if (data is List)
-      return data.isNotEmpty && data.first is Map
-          ? Map<String, dynamic>.from(data.first as Map)
-          : {};
     if (data is Map) return Map<String, dynamic>.from(data);
+    if (data is List && data.isNotEmpty && data.first is Map)
+      return Map<String, dynamic>.from(data.first);
     return {};
   }
 
   List<dynamic> _extractList(dynamic data) {
-    if (data is List)
-      return data.isNotEmpty && data.first is List
-          ? data.first as List<dynamic>
-          : data;
+    if (data is List) return data;
     return [];
   }
 
@@ -82,13 +94,14 @@ class MediasoupCallService {
 
       if (onLocalStream != null) onLocalStream!(localStream!);
 
-      final data = await _emitWithAck('getRouterRtpCapabilities', {});
+      final data = await _request(
+        'getRouterRtpCapabilities',
+        'routerRtpCapabilitiesResponse',
+        {},
+      );
       final routerRtpCapabilities = _extractMap(data);
 
-      if (routerRtpCapabilities.isEmpty) {
-        debugPrint("❌ SERVER SENT EMPTY CAPABILITIES! (Check Node.js server)");
-        return;
-      }
+      if (routerRtpCapabilities.isEmpty) return;
 
       debugPrint("⚙️ Loading Mediasoup Device...");
       _device = Device();
@@ -97,10 +110,8 @@ class MediasoupCallService {
       );
       debugPrint("✅ Mediasoup Device Loaded!");
 
-      debugPrint("🚀 Creating Send Transport...");
+      debugPrint("🚀 Creating Transports...");
       await _initSendTransport();
-
-      debugPrint("📥 Creating Recv Transport...");
       await _initRecvTransport();
 
       debugPrint("📤 Producing Local Tracks...");
@@ -127,7 +138,11 @@ class MediasoupCallService {
       });
 
       debugPrint("🔄 Fetching Existing Producers...");
-      final producersData = await _emitWithAck('getProducers', {});
+      final producersData = await _request(
+        'getProducers',
+        'producersListResponse',
+        {},
+      );
       final existingProducers = _extractList(producersData);
 
       for (var p in existingProducers) {
@@ -143,7 +158,11 @@ class MediasoupCallService {
   }
 
   Future<void> _initSendTransport() async {
-    final data = await _emitWithAck('createWebRtcTransport', {});
+    final data = await _request(
+      'createWebRtcTransport',
+      'webRtcTransportCreated',
+      {},
+    );
     final transportParams = _extractMap(data);
 
     if (transportParams.isEmpty) return;
@@ -158,95 +177,82 @@ class MediasoupCallService {
       },
     );
 
-    _sendTransport!.on('connect', (Map eventData) {
+    _sendTransport!.on('connect', (Map eventData) async {
       debugPrint("🔗 Send Transport connecting...");
-      socket.emitWithAck(
-        'connectTransport',
-        {
-          'transportId': _sendTransport!.id,
-          'dtlsParameters': (eventData['dtlsParameters'] as DtlsParameters)
-              .toMap(),
-        },
-        ack: (res) {
-          debugPrint("✅ Send Transport connected!");
-          final Function callback = eventData['callback'] as Function;
-          callback();
-        },
-      );
+      await _request('connectTransport', 'transportConnected', {
+        'transportId': _sendTransport!.id,
+        'dtlsParameters': (eventData['dtlsParameters'] as DtlsParameters)
+            .toMap(),
+      });
+      debugPrint("✅ Send Transport connected!");
+      final Function callback = eventData['callback'] as Function;
+      callback();
     });
 
-    _sendTransport!.on('produce', (Map eventData) {
+    _sendTransport!.on('produce', (Map eventData) async {
       debugPrint("🎬 Producing track: ${eventData['kind']}...");
-      socket.emitWithAck(
-        'produce',
-        {
-          'transportId': _sendTransport!.id,
-          'kind': eventData['kind'],
-          'rtpParameters': (eventData['rtpParameters'] as RtpParameters)
-              .toMap(),
-          'appData': eventData['appData'],
-        },
-        ack: (res) {
-          debugPrint("✅ Produced track: ${eventData['kind']}!");
-          final payload = _extractMap(res);
-          final Function callback = eventData['callback'] as Function;
-          callback(payload['id']);
-        },
-      );
+      final res = await _request('produce', 'produced', {
+        'transportId': _sendTransport!.id,
+        'kind': eventData['kind'],
+        'rtpParameters': (eventData['rtpParameters'] as RtpParameters).toMap(),
+        'appData': eventData['appData'],
+      });
+      debugPrint("✅ Produced track: ${eventData['kind']}!");
+
+      final payload = _extractMap(res);
+      final Function callback = eventData['callback'] as Function;
+      callback(payload['id']);
     });
   }
 
   Future<void> _initRecvTransport() async {
-    final data = await _emitWithAck('createWebRtcTransport', {});
+    final data = await _request(
+      'createWebRtcTransport',
+      'webRtcTransportCreated',
+      {},
+    );
     final transportParams = _extractMap(data);
 
     if (transportParams.isEmpty) return;
 
     _recvTransport = _device!.createRecvTransportFromMap(
       transportParams,
-      consumerCallback: (Consumer consumer) {
+      consumerCallback: (Consumer consumer) async {
         _consumers[consumer.id] = consumer;
         remoteStream!.addTrack(consumer.track);
 
         if (onRemoteStream != null) onRemoteStream!(remoteStream!);
 
         debugPrint("▶️ Resuming Consumer: ${consumer.id}...");
-        socket.emit('resumeConsumer', {'consumerId': consumer.id});
+        await _request('resumeConsumer', 'consumerResumed', {
+          'consumerId': consumer.id,
+        });
       },
     );
 
-    _recvTransport!.on('connect', (Map eventData) {
+    _recvTransport!.on('connect', (Map eventData) async {
       debugPrint("🔗 Recv Transport connecting...");
-      socket.emitWithAck(
-        'connectTransport',
-        {
-          'transportId': _recvTransport!.id,
-          'dtlsParameters': (eventData['dtlsParameters'] as DtlsParameters)
-              .toMap(),
-        },
-        ack: (res) {
-          debugPrint("✅ Recv Transport connected!");
-          final Function callback = eventData['callback'] as Function;
-          callback();
-        },
-      );
+      await _request('connectTransport', 'transportConnected', {
+        'transportId': _recvTransport!.id,
+        'dtlsParameters': (eventData['dtlsParameters'] as DtlsParameters)
+            .toMap(),
+      });
+      debugPrint("✅ Recv Transport connected!");
+      final Function callback = eventData['callback'] as Function;
+      callback();
     });
   }
 
   Future<void> _consumeProducer(String producerId) async {
     debugPrint("⬇️ Consuming remote producer: $producerId...");
-    final data = await _emitWithAck('consume', {
+    final data = await _request('consume', 'consumed', {
       'transportId': _recvTransport!.id,
       'producerId': producerId,
       'rtpCapabilities': _device!.rtpCapabilities.toMap(),
     });
 
     final consumerData = _extractMap(data);
-
-    if (consumerData.isEmpty || consumerData.containsKey('error')) {
-      debugPrint("❌ Failed to consume: $consumerData");
-      return;
-    }
+    if (consumerData.isEmpty) return;
 
     _recvTransport!.consume(
       id: consumerData['id'],

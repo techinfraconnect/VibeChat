@@ -338,7 +338,6 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       bool isVideo = mapData['isVideoCall']?.toString() == 'true';
       String caller = mapData['callerName'] ?? 'Client';
 
-      // Show foreground in-app alert dialog so you can test easily on emulators
       _showIncomingCallDialog(caller, isVideo);
 
       var callKitParams = CallKitParams(

@@ -4,7 +4,6 @@ const { Server } = require('socket.io');
 const mediasoup = require('mediasoup');
 const os = require('os');
 
-// Firebase Admin SDK
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getMessaging } = require('firebase-admin/messaging'); 
 const { v4: uuidv4 } = require('uuid');
@@ -19,7 +18,12 @@ try {
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+
+// Allow EIO3 to ensure compatibility with Dart's older socket.io client
+const io = new Server(server, { 
+  cors: { origin: "*", methods: ["GET", "POST"] },
+  allowEIO3: true 
+});
 
 let clientCanMute = true;
 let showCallLogsToClient = true;
@@ -30,23 +34,18 @@ let callLogs = [];
 let offlineMessages = [];   
 let registeredTokens = {}; 
 
-// ==========================================
-// DYNAMIC IP DETECTION FOR LOCAL NETWORK
-// ==========================================
 function getLocalIp() {
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
     for (const iface of ifaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
     }
   }
   return '127.0.0.1';
 }
 
 // ==========================================
-// MEDIASOUP SFU CONFIGURATION
+// MEDIASOUP SFU CONFIGURATION & STATE
 // ==========================================
 let mediasoupWorker;
 let mediasoupRouter;
@@ -64,18 +63,17 @@ const consumers = new Map();
 async function startMediasoup() {
   mediasoupWorker = await mediasoup.createWorker({ rtcMinPort: 20000, rtcMaxPort: 29999, logLevel: 'warn' });
   mediasoupWorker.on('died', () => {
-    console.error('❌ Mediasoup Worker died...');
+    console.error('❌ Mediasoup Worker died, exiting process in 2 seconds...');
     setTimeout(() => process.exit(1), 2000);
   });
   mediasoupRouter = await mediasoupWorker.createRouter({ mediaCodecs });
-  console.log('🚀 Mediasoup Router initialized successfully.');
+  console.log('🚀 Mediasoup Worker & Router initialized successfully.');
 }
 
 startMediasoup().catch((err) => console.error('❌ Error initializing Mediasoup:', err));
 
 async function createWebRtcTransport(socketId) {
   const announcedAddress = process.env.ANNOUNCED_IP || getLocalIp();
-
   const transport = await mediasoupRouter.createWebRtcTransport({
     listenIps: [{ ip: '0.0.0.0', announcedIp: announcedAddress }],
     enableUdp: true, enableTcp: true, preferUdp: true, initialAvailableOutgoingBitrate: 1000000
@@ -99,19 +97,21 @@ function cleanSocketMediasoup(socketId) {
   if (consumers.has(socketId)) { for (const c of consumers.get(socketId).values()) c.close(); consumers.delete(socketId); }
 }
 
-// ==========================================
-// SOCKET.IO HANDLERS
-// ==========================================
 io.on('connection', (socket) => {
   console.log(`🟢 DEVICE CONNECTED: ${socket.id}`);
 
+  // Basic Sync
   socket.emit('update_settings', { clientCanMute, showCallLogsToClient });
   socket.emit('update_names', { adminName, clientName });
   socket.emit('chat_history', chatHistory);
   socket.emit('call_logs', callLogs);
 
-  if (offlineMessages.length > 0) { offlineMessages.forEach(msg => socket.emit('receive_message', msg)); offlineMessages = []; }
+  if (offlineMessages.length > 0) {
+    offlineMessages.forEach(msg => socket.emit('receive_message', msg));
+    offlineMessages = [];
+  }
 
+  // General chat logic
   socket.on('register_fcm_token', (data) => { if (data.role && data.token) registeredTokens[data.role] = data.token; });
   socket.on('update_settings', (data) => {
     if (data.clientCanMute !== undefined) clientCanMute = data.clientCanMute;
@@ -135,15 +135,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('edit_message', (data) => { if (data.index < chatHistory.length) chatHistory[data.index].message = data.message; socket.broadcast.emit('edit_message', data); });
+  socket.on('edit_message', (data) => {
+    if (data.index < chatHistory.length) chatHistory[data.index].message = data.message;
+    socket.broadcast.emit('edit_message', data);
+  });
 
   socket.on('call_invite', (data) => {
     data.clientCanMute = clientCanMute; data.showCallLogsToClient = showCallLogsToClient; data.callId = data.callId || uuidv4();
     const now = new Date(); const formattedDate = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
     const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     callLogs.unshift({ id: data.callId, caller: data.callerName, type: data.isVideoCall ? 'WhatsApp Video' : 'WhatsApp Audio', status: 'Missed', dateTime: `${formattedDate}, ${formattedTime}` });
-    
     socket.broadcast.emit('incoming_call', data); io.emit('call_logs_update', callLogs);
+
     const targetRole = (data.callerName === adminName) ? 'client' : 'admin';
     sendPushNotification(targetRole, "Incoming Call", `${data.callerName} is calling you...`, { type: 'call', callId: data.callId, callerName: data.callerName, isVideoCall: data.isVideoCall ? 'true' : 'false' });
   });
@@ -156,25 +159,21 @@ io.on('connection', (socket) => {
     sendPushNotification('client', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId }); sendPushNotification('admin', 'Call Cancelled', 'Missed Call', { type: 'cancel_call', callId });
   });
   socket.on('clear_call_logs', () => { callLogs = []; io.emit('call_logs_update', callLogs); });
-
   socket.on('end-call', () => {
     if (callLogs.length > 0 && callLogs[0].status === 'Connected') callLogs[0].status = 'Completed';
     cleanSocketMediasoup(socket.id); socket.broadcast.emit('end-call'); io.emit('call_logs_update', callLogs);
   });
 
   // ==========================================
-  // MEDIASOUP SFU
+  // MEDIASOUP SFU (PUB/SUB BULLETPROOF LOGIC)
   // ==========================================
   
-  // FIX: Properly accept (data, callback) to prevent "TypeError: callback is not a function"
-  socket.on('getRouterRtpCapabilities', (data, callback) => { 
-    const cb = typeof data === 'function' ? data : callback;
-    if (cb) cb(mediasoupRouter.rtpCapabilities); 
+  socket.on('getRouterRtpCapabilities', (data) => { 
+    if (!mediasoupRouter) return;
+    socket.emit('routerRtpCapabilitiesResponse', { reqId: data?.reqId, data: mediasoupRouter.rtpCapabilities });
   });
   
-  // FIX: Properly accept (data, callback) 
-  socket.on('getProducers', (data, callback) => {
-    const cb = typeof data === 'function' ? data : callback;
+  socket.on('getProducers', (data) => {
     let existingProducers = [];
     for (let [peerId, peerProducers] of producers.entries()) {
       if (peerId !== socket.id) {
@@ -183,45 +182,68 @@ io.on('connection', (socket) => {
         }
       }
     }
-    if (cb) cb(existingProducers);
+    socket.emit('producersListResponse', { reqId: data?.reqId, data: existingProducers });
   });
 
-  socket.on('createWebRtcTransport', async (data, callback) => {
-    const cb = typeof data === 'function' ? data : callback;
-    try { const { params } = await createWebRtcTransport(socket.id); cb(params); } catch (err) { cb({ error: err.message }); }
+  socket.on('createWebRtcTransport', async (data) => {
+    try { 
+      const { params } = await createWebRtcTransport(socket.id); 
+      socket.emit('webRtcTransportCreated', { reqId: data?.reqId, data: params });
+    } catch (err) { 
+      socket.emit('webRtcTransportCreated', { reqId: data?.reqId, error: err.message });
+    }
   });
 
-  socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) => {
-    try { await transports.get(socket.id).get(transportId).connect({ dtlsParameters }); callback({ connected: true }); } catch (err) { callback({ error: err.message }); }
+  socket.on('connectTransport', async (payload) => {
+    try { 
+      await transports.get(socket.id).get(payload.transportId).connect({ dtlsParameters: payload.dtlsParameters }); 
+      socket.emit('transportConnected', { reqId: payload?.reqId, data: { connected: true } });
+    } catch (err) { 
+      socket.emit('transportConnected', { reqId: payload?.reqId, error: err.message });
+    }
   });
 
-  socket.on('produce', async ({ transportId, kind, rtpParameters, appData }, callback) => {
+  socket.on('produce', async (payload) => {
     try {
-      const producer = await transports.get(socket.id).get(transportId).produce({ kind, rtpParameters, appData });
+      const producer = await transports.get(socket.id).get(payload.transportId).produce({ 
+        kind: payload.kind, rtpParameters: payload.rtpParameters, appData: payload.appData 
+      });
       if (!producers.has(socket.id)) producers.set(socket.id, new Map());
       producers.get(socket.id).set(producer.id, producer);
       producer.on('transportclose', () => { if (producers.has(socket.id)) producers.get(socket.id).delete(producer.id); });
       
-      socket.broadcast.emit('newProducer', { producerId: producer.id, socketId: socket.id, kind });
-      callback({ id: producer.id });
-    } catch (err) { callback({ error: err.message }); }
+      socket.broadcast.emit('newProducer', { producerId: producer.id, socketId: socket.id, kind: producer.kind });
+      socket.emit('produced', { reqId: payload?.reqId, data: { id: producer.id } });
+    } catch (err) { 
+      socket.emit('produced', { reqId: payload?.reqId, error: err.message });
+    }
   });
 
-  socket.on('consume', async ({ transportId, producerId, rtpCapabilities }, callback) => {
+  socket.on('consume', async (payload) => {
     try {
-      if (!mediasoupRouter.canConsume({ producerId, rtpCapabilities })) return callback({ error: 'Cannot consume' });
-      const consumer = await transports.get(socket.id).get(transportId).consume({ producerId, rtpCapabilities, paused: true });
+      if (!mediasoupRouter.canConsume({ producerId: payload.producerId, rtpCapabilities: payload.rtpCapabilities })) {
+        return socket.emit('consumed', { reqId: payload?.reqId, error: 'Cannot consume' });
+      }
+      const consumer = await transports.get(socket.id).get(payload.transportId).consume({ 
+        producerId: payload.producerId, rtpCapabilities: payload.rtpCapabilities, paused: true 
+      });
       if (!consumers.has(socket.id)) consumers.set(socket.id, new Map());
       consumers.get(socket.id).set(consumer.id, consumer);
       consumer.on('transportclose', () => { if (consumers.has(socket.id)) consumers.get(socket.id).delete(consumer.id); });
       consumer.on('producerclose', () => { socket.emit('producerClosed', { consumerId: consumer.id }); });
       
-      callback({ id: consumer.id, producerId, kind: consumer.kind, rtpParameters: consumer.rtpParameters });
-    } catch (err) { callback({ error: err.message }); }
+      socket.emit('consumed', { reqId: payload?.reqId, data: { id: consumer.id, producerId: payload.producerId, kind: consumer.kind, rtpParameters: consumer.rtpParameters } });
+    } catch (err) { 
+      socket.emit('consumed', { reqId: payload?.reqId, error: err.message });
+    }
   });
 
-  socket.on('resumeConsumer', async ({ consumerId }, callback) => {
-    try { const consumer = consumers.get(socket.id)?.get(consumerId); if (consumer) await consumer.resume(); if (callback) callback({ resumed: true }); } catch (err) {}
+  socket.on('resumeConsumer', async (payload) => {
+    try { 
+      const consumer = consumers.get(socket.id)?.get(payload.consumerId); 
+      if (consumer) await consumer.resume(); 
+      socket.emit('consumerResumed', { reqId: payload?.reqId, data: { resumed: true } });
+    } catch (err) {}
   });
 
   socket.on('disconnect', () => { console.log(`🔴 DISCONNECTED: ${socket.id}`); cleanSocketMediasoup(socket.id); });
