@@ -5,7 +5,6 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 
-import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/ios_params.dart';
@@ -68,13 +67,10 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
           context,
           MaterialPageRoute(
             builder: (context) => CallScreen(
-              callerName: _adminName,
-              targetUser: _clientName,
+              callerName: _clientName,
               isVideoCall: isVideo,
               isCaller: false,
               socket: widget.socket,
-              clientCanMute: _clientCanMute,
-              isAdmin: true,
             ),
           ),
         );
@@ -83,6 +79,72 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
         widget.socket.emit('call_rejected');
       }
     });
+  }
+
+  void _showIncomingCallDialog(String caller, bool isVideo) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1C1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(
+              isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+              color: const Color(0xFF0A84FF),
+              size: 28,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              isVideo ? "Incoming Video Call" : "Incoming Call",
+              style: const TextStyle(color: Colors.white, fontSize: 18),
+            ),
+          ],
+        ),
+        content: Text(
+          "$caller is calling you...",
+          style: const TextStyle(color: Colors.white70, fontSize: 16),
+        ),
+        actionsAlignment: MainAxisAlignment.spaceEvenly,
+        actions: [
+          IconButton(
+            iconSize: 44,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              padding: const EdgeInsets.all(10),
+            ),
+            icon: const Icon(Icons.call_end_rounded, color: Colors.white),
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.socket.emit('call_rejected');
+            },
+          ),
+          IconButton(
+            iconSize: 44,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.green,
+              padding: const EdgeInsets.all(10),
+            ),
+            icon: const Icon(Icons.call_rounded, color: Colors.white),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => CallScreen(
+                    callerName: caller,
+                    isVideoCall: isVideo,
+                    isCaller: false,
+                    socket: widget.socket,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadLocalData() async {
@@ -273,20 +335,24 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
         }
       });
 
+      bool isVideo = mapData['isVideoCall']?.toString() == 'true';
+      String caller = mapData['callerName'] ?? 'Client';
+
+      // Show foreground in-app alert dialog so you can test easily on emulators
+      _showIncomingCallDialog(caller, isVideo);
+
       var callKitParams = CallKitParams(
         id:
             mapData['callId'] ??
             DateTime.now().millisecondsSinceEpoch.toString(),
-        nameCaller: mapData['callerName'] ?? 'Caller',
+        nameCaller: caller,
         appName: 'VibeChat Admin',
         avatar: 'https://i.pravatar.cc/100',
-        handle: mapData['isVideoCall']?.toString() == 'true'
-            ? 'Video Call'
-            : 'Audio Call',
-        type: mapData['isVideoCall']?.toString() == 'true' ? 1 : 0,
+        handle: isVideo ? 'Video Call' : 'Audio Call',
+        type: isVideo ? 1 : 0,
         duration: 30000,
         extra: <String, dynamic>{
-          'isVideoCall': mapData['isVideoCall']?.toString(),
+          'isVideoCall': isVideo.toString(),
           'callId': mapData['callId'],
         },
         android: const AndroidParams(
@@ -371,13 +437,10 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => CallScreen(
-          callerName: _adminName,
-          targetUser: _clientName,
+          callerName: _clientName,
           isVideoCall: isVideo,
           isCaller: true,
           socket: widget.socket,
-          clientCanMute: _clientCanMute,
-          isAdmin: true,
         ),
       ),
     );
@@ -607,7 +670,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF1C1C1E),
                 border: Border(
-                  top: BorderSide(color: Colors.white.withOpacity(0.1)),
+                  top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
                 ),
               ),
               child: Row(
@@ -632,7 +695,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
                               ? "Edit message..."
                               : "Type a message...",
                           hintStyle: TextStyle(
-                            color: Colors.white.withOpacity(0.4),
+                            color: Colors.white.withValues(alpha: 0.4),
                           ),
                           border: InputBorder.none,
                           isDense: true,

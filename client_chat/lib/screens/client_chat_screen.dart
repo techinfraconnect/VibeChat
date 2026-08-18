@@ -2,16 +2,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 
-import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 
 import 'call_screen.dart';
-import 'call_logs_screen.dart';
 
 class ClientChatScreen extends StatefulWidget {
   final io.Socket socket;
@@ -24,11 +21,8 @@ class ClientChatScreen extends StatefulWidget {
 class _ClientChatScreenState extends State<ClientChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final FlutterLocalNotificationsPlugin _localNotifications =
-      FlutterLocalNotificationsPlugin();
 
   final List<Map<String, dynamic>> _messages = [];
-  final List<Map<String, dynamic>> _callLogs = [];
 
   int? _editingIndex;
   bool _clientCanMute = true;
@@ -66,13 +60,10 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
           context,
           MaterialPageRoute(
             builder: (context) => CallScreen(
-              callerName: _clientName,
-              targetUser: _adminName,
+              callerName: _adminName,
               isVideoCall: isVideo,
               isCaller: false,
               socket: widget.socket,
-              clientCanMute: _clientCanMute,
-              isAdmin: false,
             ),
           ),
         );
@@ -81,6 +72,72 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         widget.socket.emit('call_rejected');
       }
     });
+  }
+
+  void _showIncomingCallDialog(String caller, bool isVideo) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1C1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(
+              isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+              color: const Color(0xFF0A84FF),
+              size: 28,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              isVideo ? "Incoming Video Call" : "Incoming Call",
+              style: const TextStyle(color: Colors.white, fontSize: 18),
+            ),
+          ],
+        ),
+        content: Text(
+          "$caller is calling you...",
+          style: const TextStyle(color: Colors.white70, fontSize: 16),
+        ),
+        actionsAlignment: MainAxisAlignment.spaceEvenly,
+        actions: [
+          IconButton(
+            iconSize: 44,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              padding: const EdgeInsets.all(10),
+            ),
+            icon: const Icon(Icons.call_end_rounded, color: Colors.white),
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.socket.emit('call_rejected');
+            },
+          ),
+          IconButton(
+            iconSize: 44,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.green,
+              padding: const EdgeInsets.all(10),
+            ),
+            icon: const Icon(Icons.call_rounded, color: Colors.white),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => CallScreen(
+                    callerName: caller,
+                    isVideoCall: isVideo,
+                    isCaller: false,
+                    socket: widget.socket,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadLocalData() async {
@@ -238,20 +295,25 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
         }
       });
 
+      bool isVideo = mapData['isVideoCall']?.toString() == 'true';
+      String caller = mapData['callerName'] ?? 'Admin';
+
+      // 1. Show Foreground In-App Alert Dialog
+      _showIncomingCallDialog(caller, isVideo);
+
+      // 2. Also register CallKit for background
       var callKitParams = CallKitParams(
         id:
             mapData['callId'] ??
             DateTime.now().millisecondsSinceEpoch.toString(),
-        nameCaller: mapData['callerName'] ?? 'Caller',
+        nameCaller: caller,
         appName: 'VibeChat Client',
         avatar: 'https://i.pravatar.cc/100',
-        handle: mapData['isVideoCall']?.toString() == 'true'
-            ? 'Video Call'
-            : 'Audio Call',
-        type: mapData['isVideoCall']?.toString() == 'true' ? 1 : 0,
+        handle: isVideo ? 'Video Call' : 'Audio Call',
+        type: isVideo ? 1 : 0,
         duration: 30000,
         extra: <String, dynamic>{
-          'isVideoCall': mapData['isVideoCall']?.toString(),
+          'isVideoCall': isVideo.toString(),
           'callId': mapData['callId'],
         },
         android: const AndroidParams(
@@ -336,13 +398,11 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => CallScreen(
-          callerName: _clientName,
-          targetUser: _adminName,
+          callerName:
+              _adminName, // <--- PRO FIX: Display the Admin's name on your screen!
           isVideoCall: isVideo,
           isCaller: true,
           socket: widget.socket,
-          clientCanMute: _clientCanMute,
-          isAdmin: false,
         ),
       ),
     );
@@ -376,22 +436,28 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
               itemBuilder: (context, index) {
                 final msg = _messages[index];
                 bool isMe = msg['sender'] == _clientName;
-                return Align(
-                  alignment: isMe
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isMe
-                          ? const Color(0xFF0A84FF)
-                          : const Color(0xFF2C2C2E),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Text(
-                      msg['message'] ?? '',
-                      style: const TextStyle(fontSize: 16, color: Colors.white),
+                return GestureDetector(
+                  onLongPress: () => _startEditing(index),
+                  child: Align(
+                    alignment: isMe
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isMe
+                            ? const Color(0xFF0A84FF)
+                            : const Color(0xFF2C2C2E),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        msg['message'] ?? '',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
                 );
@@ -417,7 +483,7 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                               ? "Edit message..."
                               : "Type a message...",
                           hintStyle: TextStyle(
-                            color: Colors.white.withOpacity(0.4),
+                            color: Colors.white.withValues(alpha: 0.4),
                           ),
                           border: InputBorder.none,
                           contentPadding: const EdgeInsets.symmetric(
@@ -436,7 +502,10 @@ class _ClientChatScreenState extends State<ClientChatScreen> {
                         shape: BoxShape.circle,
                         color: Color(0xFF0A84FF),
                       ),
-                      child: const Icon(Icons.send, color: Colors.white),
+                      child: Icon(
+                        _editingIndex != null ? Icons.check : Icons.send,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ],

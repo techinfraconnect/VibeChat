@@ -15,7 +15,8 @@ class SocketService {
 
     // FIX: Changed 'IO.io' and 'IO.OptionBuilder' to 'io'
     socket = io.io(
-      'https://vibechat-server-vo3f.onrender.com',
+      //'https://vibechat-server-vo3f.onrender.com',
+      'http://10.0.2.2:3000',
       io.OptionBuilder()
           .setTransports(['websocket', 'polling'])
           .disableAutoConnect() // We manually connect below
